@@ -237,7 +237,7 @@
 
 <header>
   <div class="logo">n0st<span>o</span>ps</div>
-  <div class="header-stats">
+  <div class="header-stats" id="header-portfolio">
     <div class="hstat">
       <span class="hstat-label">Total Value</span>
       <span class="hstat-val" id="h-total">—</span>
@@ -253,6 +253,16 @@
     <div class="hstat">
       <span class="hstat-label">As Of</span>
       <span class="hstat-val" id="h-date" style="color:var(--text-3)">—</span>
+    </div>
+  </div>
+  <div class="header-stats" id="header-trades" style="display:none">
+    <div class="hstat">
+      <span class="hstat-label">WB Balance</span>
+      <span class="hstat-val" id="h-wb-balance">—</span>
+    </div>
+    <div class="hstat">
+      <span class="hstat-label">As Of</span>
+      <span class="hstat-val" id="h-wb-date" style="color:var(--text-3)">—</span>
     </div>
   </div>
   <button class="refresh-btn" onclick="loadData()">↻ Refresh</button>
@@ -1005,6 +1015,9 @@ document.getElementById('h-total').textContent = fmt(endVal);
   let tradesPreset  = 'all';
   let tradesFrom    = '';
   let tradesTo      = '';
+  let tradesTypeFilter = 'all'; // 'all' | 'day' | 'swing'
+  let tradesTickerFilter = 'all';
+  let tradesOptType = 'all'; // 'all' | 'call' | 'put'
 
   function switchTab(tab) {
     activeTab = tab;
@@ -1012,11 +1025,23 @@ document.getElementById('h-total').textContent = fmt(endVal);
     document.getElementById('tab-trades').className    = 'tab-btn' + (tab==='trades'    ? ' active' : '');
     document.getElementById('content').style.display        = tab==='portfolio' ? '' : 'none';
     document.getElementById('trades-content').style.display = tab==='trades'    ? 'flex' : 'none';
+    document.getElementById('header-portfolio').style.display = tab==='portfolio' ? '' : 'none';
+    document.getElementById('header-trades').style.display    = tab==='trades'    ? '' : 'none';
     if (tab==='trades' && !_tradesLoaded) loadTrades();
+    if (tab==='trades') updateTradesHeader();
+  }
+
+  function updateTradesHeader() {
+    if (!_dailyData || !_dailyData.length) return;
+    const latest = _dailyData[_dailyData.length - 1];
+    document.getElementById('h-wb-balance').textContent = fmt(latest.balance);
+    document.getElementById('h-wb-date').textContent = latest.date;
   }
 
   // ── TRADES ──
   const TRADES_URL = API + '?tab=WB%20Brokerage%20Trades';
+  const DAILY_URL  = API + '?tab=WB%20Daily';
+  let _dailyData   = null; // [{Date, Balance, RiskPct}]
 
   function parseCSV(text) {
     const lines = text.trim().split('\n');
@@ -1109,10 +1134,84 @@ document.getElementById('h-total').textContent = fmt(endVal);
     return { closed, open };
   }
 
+  async function loadDaily() {
+    try {
+      const res = await fetch(DAILY_URL);
+      const json = await res.json();
+      if (json.error) return;
+      _dailyData = json.data
+        .filter(r => r['Date'] && r['Balance'])
+        .map(r => ({
+          date: fmtDate(r['Date']),
+          balance: parseFloat(String(r['Balance']).replace(/[$,]/g,'')) || 0,
+          riskPct: r['Risk %'] != null ? parseFloat(String(r['Risk %']).replace('%','')) / 100 : null,
+        }))
+        .sort((a,b) => new Date(a.date) - new Date(b.date));
+      // Forward-fill riskPct
+      let lastRisk = 1;
+      _dailyData.forEach(d => {
+        if (d.riskPct !== null && !isNaN(d.riskPct)) lastRisk = d.riskPct;
+        else d.riskPct = lastRisk;
+      });
+    } catch(e) { /* daily data is optional enhancement */ }
+  }
+
+  function lookupDaily(dateStr) {
+    if (!_dailyData || !_dailyData.length) return null;
+    const target = fmtDate(dateStr);
+    let best = null;
+    for (const d of _dailyData) {
+      if (d.date <= target) best = d;
+      else break;
+    }
+    return best;
+  }
+
+  function aggregateByContract(data) {
+    const { closed, open } = data;
+    const bySymbol = {};
+    closed.forEach(lot => {
+      if (!bySymbol[lot.symbol]) bySymbol[lot.symbol] = { lots: [], parsed: lot.parsed };
+      bySymbol[lot.symbol].lots.push(lot);
+    });
+    const trades = Object.entries(bySymbol).map(([symbol, { lots, parsed }]) => {
+      const totalCost = lots.reduce((s, l) => s + l.entryPrice * l.qty * 100, 0);
+      const totalPnL  = lots.reduce((s, l) => s + l.pnl, 0);
+      const totalQty  = lots.reduce((s, l) => s + l.qty, 0);
+      const firstOpen = lots.reduce((earliest, l) => {
+        const t = parseTradeDate(l.openTime);
+        return t < earliest ? t : earliest;
+      }, parseTradeDate(lots[0].openTime));
+      const lastClose = lots.reduce((latest, l) => {
+        const t = parseTradeDate(l.closeTime);
+        return t > latest ? t : latest;
+      }, parseTradeDate(lots[0].closeTime));
+      const expired = lots.some(l => l.expired);
+      const daily = lookupDaily(lots[0].openTime);
+      const balance = daily ? daily.balance : null;
+      const riskPct = daily ? daily.riskPct : 1;
+      const sizePct = balance ? totalCost / balance : null;
+      const oneR    = totalCost * riskPct;
+      const rMultiple = oneR > 0 ? totalPnL / oneR : null;
+      return {
+        symbol, parsed, totalCost, totalPnL, totalQty,
+        openTime: lots[0].openTime, closeTime: lots[lots.length-1].closeTime,
+        firstOpen, lastClose, expired,
+        sizePct, riskPct, oneR, rMultiple,
+        avgEntry: totalCost / (totalQty * 100),
+        pnlPct: totalCost > 0 ? (totalPnL / totalCost) * 100 : 0,
+        daysHeld: Math.round((lastClose - firstOpen) / 86400000),
+      };
+    });
+    trades.sort((a,b) => a.firstOpen - b.firstOpen);
+    return trades;
+  }
+
   async function loadTrades() {
     const wrap = document.getElementById('trades-content');
     wrap.innerHTML = '<div class="status-banner">Loading trades...</div>';
     try {
+      await loadDaily();
       const res  = await fetch(TRADES_URL);
       const json = await res.json();
       if (json.error) throw new Error(json.error);
@@ -1124,21 +1223,73 @@ document.getElementById('h-total').textContent = fmt(endVal);
     }
   }
 
-  function buildGroupStats(trades) {
-    const winners  = trades.filter(t => t.pnl > 0);
-    const losers   = trades.filter(t => t.pnl < 0);
-    const totalPnL = trades.reduce((s,t) => s+t.pnl, 0);
-    const winRate  = trades.length ? (winners.length/trades.length*100) : 0;
-    const avgPnL   = trades.length ? totalPnL/trades.length : 0;
-    const best     = trades.length ? Math.max(...trades.map(t=>t.pnl)) : 0;
-    const worst    = trades.length ? Math.min(...trades.map(t=>t.pnl)) : 0;
-    const expired  = trades.filter(t => t.expired).length;
-    return { totalPnL, winRate, avgPnL, best, worst, count: trades.length, expired };
+
+  function buildDisciplineStats(trades) {
+    if (!trades.length) return { maxDD: 0, ddPct: null, avgHoldWin: null, avgHoldLoss: null, tradesPerWeek: null, maxStreak: 0 };
+    // Max drawdown (peak-to-trough on cumulative P&L)
+    let cum = 0, peak = 0, maxDD = 0;
+    trades.forEach(t => {
+      cum += t.totalPnL;
+      if (cum > peak) peak = cum;
+      const dd = peak - cum;
+      if (dd > maxDD) maxDD = dd;
+    });
+    // Avg hold time: winners vs losers
+    const winners = trades.filter(t => t.totalPnL > 0);
+    const losers  = trades.filter(t => t.totalPnL < 0);
+    const avgHoldWin  = winners.length ? winners.reduce((s,t) => s + t.daysHeld, 0) / winners.length : null;
+    const avgHoldLoss = losers.length  ? losers.reduce((s,t) => s + t.daysHeld, 0) / losers.length  : null;
+    // Trade frequency (trades per week based on span)
+    const span = trades.length >= 2
+      ? (trades[trades.length-1].lastClose - trades[0].firstOpen) / (7 * 86400000)
+      : null;
+    const tradesPerWeek = span && span > 0 ? trades.length / span : null;
+    // Max consecutive losses
+    let maxStreak = 0, streak = 0;
+    trades.forEach(t => {
+      if (t.totalPnL < 0) { streak++; if (streak > maxStreak) maxStreak = streak; }
+      else streak = 0;
+    });
+    // Max drawdown as % of peak balance (if daily data available)
+    const firstDaily = trades[0] ? lookupDaily(trades[0].openTime) : null;
+    const ddPct = firstDaily && firstDaily.balance > 0 ? (maxDD / firstDaily.balance) * 100 : null;
+    return { maxDD, ddPct, avgHoldWin, avgHoldLoss, tradesPerWeek, maxStreak };
+  }
+
+  function buildRStats(trades) {
+    const withR   = trades.filter(t => t.rMultiple !== null);
+    const withSize = trades.filter(t => t.sizePct !== null);
+    if (!withR.length) return { avgR: null, avgWinR: null, avgLossR: null, expectancy: null, avgSize: null, maxSize: null, count: 0 };
+    const winners = withR.filter(t => t.totalPnL > 0);
+    const losers  = withR.filter(t => t.totalPnL < 0);
+    const avgR    = withR.reduce((s,t) => s + t.rMultiple, 0) / withR.length;
+    const avgWinR = winners.length ? winners.reduce((s,t) => s + t.rMultiple, 0) / winners.length : 0;
+    const avgLossR = losers.length ? losers.reduce((s,t) => s + t.rMultiple, 0) / losers.length : 0;
+    const winRate  = withR.length ? (winners.length / withR.length) : 0;
+    const expectancy = (winRate * avgWinR) + ((1 - winRate) * avgLossR);
+    const avgSize  = withSize.length ? withSize.reduce((s,t) => s + t.sizePct, 0) / withSize.length : null;
+    const maxSize  = withSize.length ? Math.max(...withSize.map(t => t.sizePct)) : null;
+    return { avgR, avgWinR, avgLossR, expectancy, avgSize, maxSize, count: withR.length };
   }
 
   function setTradesPreset(p) {
     tradesPreset = p;
     if (p !== 'custom') { tradesFrom = ''; tradesTo = ''; }
+    renderTrades();
+  }
+
+  function setTradesType(t) {
+    tradesTypeFilter = t;
+    renderTrades();
+  }
+
+  function setTradesTicker(t) {
+    tradesTickerFilter = t;
+    renderTrades();
+  }
+
+  function setTradesOptType(t) {
+    tradesOptType = t;
     renderTrades();
   }
 
@@ -1149,62 +1300,54 @@ document.getElementById('h-total').textContent = fmt(endVal);
     renderTrades();
   }
 
-  function renderTickerSummary(closed) {
-    const byTicker = {};
-    closed.forEach(t => {
-      const u = t.parsed.underlying || '?';
-      if (!byTicker[u]) byTicker[u] = [];
-      byTicker[u].push(t);
-    });
-    const rows = Object.entries(byTicker)
-      .map(([ticker, trades]) => ({ ticker, ...buildGroupStats(trades) }))
-      .sort((a,b) => b.count - a.count);
 
-    return `<div class="section-title">By Ticker</div>
-    <div class="trades-table-wrap">
-      <table class="trades-table">
-        <thead><tr>
-          <th>Ticker</th><th>Trades</th><th>Win Rate</th>
-          <th>Total P&L</th><th>Avg P&L</th><th>Best</th><th>Worst</th><th>Expired</th>
-        </tr></thead>
-        <tbody>${rows.map(r => `<tr>
-          <td style="color:var(--text-1);font-weight:500">${r.ticker}</td>
-          <td>${r.count}</td>
-          <td class="${r.winRate>=50?'pos':'neg'}">${r.winRate.toFixed(1)}%</td>
-          <td class="${cls(r.totalPnL)}">${fmtS(r.totalPnL)}</td>
-          <td class="${cls(r.avgPnL)}">${fmtS(r.avgPnL)}</td>
-          <td class="pos">${fmtS(r.best)}</td>
-          <td class="neg">${fmtS(r.worst)}</td>
-          <td style="color:var(--text-3)">${r.expired}</td>
-        </tr>`).join('')}</tbody>
-      </table>
-    </div>`;
+  function applyTradesFilterAgg(trades) {
+    const now = new Date();
+    let from = null;
+    if (tradesPreset === '1w')  { from = new Date(now); from.setDate(from.getDate()-7); }
+    else if (tradesPreset === '1m')  { from = new Date(now); from.setMonth(from.getMonth()-1); }
+    else if (tradesPreset === '3m')  { from = new Date(now); from.setMonth(from.getMonth()-3); }
+    else if (tradesPreset === 'ytd') { from = new Date(now.getFullYear(), 0, 1); }
+    else if (tradesPreset === 'custom') {
+      from = tradesFrom ? new Date(tradesFrom + 'T00:00:00') : null;
+    }
+    const to = (tradesPreset === 'custom' && tradesTo) ? new Date(tradesTo + 'T23:59:59') : null;
+    return trades.filter(t => {
+      const d = t.lastClose;
+      if (from && d < from) return false;
+      if (to   && d > to)   return false;
+      return true;
+    });
   }
 
-  function renderTypeSummary(closed) {
-    const calls = closed.filter(t => t.parsed.type === 'Call');
-    const puts  = closed.filter(t => t.parsed.type === 'Put');
-    const rows  = [
-      { label: 'Calls', ...buildGroupStats(calls) },
-      { label: 'Puts',  ...buildGroupStats(puts)  },
-      { label: 'Total', ...buildGroupStats(closed) },
-    ];
-    return `<div class="section-title">Calls vs Puts</div>
+  function renderTradeLog(trades) {
+    if (!trades.length) return '';
+    function fmtR(r) { return r !== null ? (r >= 0 ? '+' : '') + r.toFixed(2) + 'R' : '—'; }
+    function fmtSizePct(p) { return p !== null ? (p * 100).toFixed(1) + '%' : '—'; }
+    function fmtDt(s) { return s ? s.slice(0,10) : '—'; }
+    const hasR = trades.some(t => t.rMultiple !== null);
+    return `<div class="section-title">Trade Log (Contract-Level)</div>
     <div class="trades-table-wrap">
       <table class="trades-table">
         <thead><tr>
-          <th>Type</th><th>Trades</th><th>Win Rate</th>
-          <th>Total P&L</th><th>Avg P&L</th><th>Best</th><th>Worst</th><th>Expired</th>
+          <th>Underlying</th><th>Type</th><th>Strike</th><th>Expiry</th>
+          <th>Qty</th><th>Cost Basis</th><th>P&L</th><th>P&L %</th>
+          ${hasR ? '<th>Size %</th><th>R</th>' : ''}
+          <th>Opened</th><th>Closed</th><th>Days</th>
         </tr></thead>
-        <tbody>${rows.map((r,i) => `<tr ${i===2?'style="border-top:1px solid var(--border-2)"':''}>
-          <td><span class="badge ${r.label==='Calls'?'badge-call':r.label==='Puts'?'badge-put':''}" style="${r.label==='Total'?'color:var(--text-2)':''}">${r.label}</span></td>
-          <td>${r.count}</td>
-          <td class="${r.winRate>=50?'pos':'neg'}">${r.winRate.toFixed(1)}%</td>
-          <td class="${cls(r.totalPnL)}">${fmtS(r.totalPnL)}</td>
-          <td class="${cls(r.avgPnL)}">${fmtS(r.avgPnL)}</td>
-          <td class="pos">${fmtS(r.best)}</td>
-          <td class="neg">${fmtS(r.worst)}</td>
-          <td style="color:var(--text-3)">${r.expired}</td>
+        <tbody>${[...trades].reverse().map(t => `<tr>
+          <td style="color:var(--text-1);font-weight:500">${t.parsed.underlying}</td>
+          <td><span class="badge ${t.parsed.type==='Call'?'badge-call':'badge-put'}">${t.parsed.type}</span></td>
+          <td>$${t.parsed.strike.toFixed(0)}</td>
+          <td>${t.parsed.expiryDisplay}</td>
+          <td>${t.totalQty}</td>
+          <td>${fmt(t.totalCost)}</td>
+          <td class="${cls(t.totalPnL)}">${fmtS(t.totalPnL)}</td>
+          <td class="${cls(t.pnlPct)}">${t.pnlPct.toFixed(1)}%</td>
+          ${hasR ? `<td>${fmtSizePct(t.sizePct)}</td><td class="${t.rMultiple!==null?cls(t.rMultiple):''}">${fmtR(t.rMultiple)}</td>` : ''}
+          <td>${fmtDt(t.openTime)}</td>
+          <td>${fmtDt(t.closeTime)}</td>
+          <td>${t.daysHeld}d</td>
         </tr>`).join('')}</tbody>
       </table>
     </div>`;
@@ -1234,39 +1377,169 @@ document.getElementById('h-total').textContent = fmt(endVal);
     };
   }
 
+  let tradesCumMode = 'pnl'; // 'pnl' | 'r'
+
+  function setTradesCumMode(m) {
+    tradesCumMode = m;
+    renderTrades();
+  }
+
   function renderTrades() {
-    const { closed, open } = applyTradesFilter();
+    let { closed, open } = applyTradesFilter();
+    const trades = aggregateByContract(_tradesData);
+    let filteredTrades = applyTradesFilterAgg(trades);
+
+    // Apply type filter (day/swing)
+    if (tradesTypeFilter !== 'all') {
+      filteredTrades = filteredTrades.filter(t => tradesTypeFilter === 'day' ? t.daysHeld === 0 : t.daysHeld > 0);
+      const symbols = new Set(filteredTrades.map(t => t.symbol));
+      closed = closed.filter(t => symbols.has(t.symbol));
+    }
+    // Apply ticker filter
+    if (tradesTickerFilter !== 'all') {
+      filteredTrades = filteredTrades.filter(t => t.parsed.underlying === tradesTickerFilter);
+      const symbols = new Set(filteredTrades.map(t => t.symbol));
+      closed = closed.filter(t => symbols.has(t.symbol));
+    }
+    // Apply option type filter (call/put)
+    if (tradesOptType !== 'all') {
+      const typeMatch = tradesOptType === 'call' ? 'Call' : 'Put';
+      filteredTrades = filteredTrades.filter(t => t.parsed.type === typeMatch);
+      const symbols = new Set(filteredTrades.map(t => t.symbol));
+      closed = closed.filter(t => symbols.has(t.symbol));
+    }
+
     const wrap = document.getElementById('trades-content');
     if (!wrap) return;
 
+    // Build ticker list from all trades (pre-filter) for pills
+    const allTickers = [...new Set(trades.map(t => t.parsed.underlying))].sort();
+
     const presets = ['1w','1m','3m','ytd','all'];
     const presetLabels = { '1w':'1W','1m':'1M','3m':'3M','ytd':'YTD','all':'All' };
+    const typeFilters = ['all','day','swing'];
+    const typeLabels = { all:'All', day:'Day', swing:'Swing' };
+    const optTypes = ['all','call','put'];
+    const optLabels = { all:'All', call:'Calls', put:'Puts' };
     const filterBar = `
-      <div class="trades-filter">
+      <div class="trades-filter" style="flex-wrap:wrap;gap:0.5rem 0.6rem">
         ${presets.map(p => `<button class="pill${tradesPreset===p?' active':''}" onclick="setTradesPreset('${p}')">${presetLabels[p]}</button>`).join('')}
-        <span class="sep" style="margin-left:0.4rem">|</span>
+        <span class="sep">|</span>
         <input class="date-input" type="date" id="t-from" value="${tradesFrom}" onchange="setTradesCustom()" />
         <span class="sep">→</span>
         <input class="date-input" type="date" id="t-to" value="${tradesTo}" onchange="setTradesCustom()" />
+        <span class="sep">|</span>
+        ${typeFilters.map(t => `<button class="pill${tradesTypeFilter===t?' active':''}" onclick="setTradesType('${t}')">${typeLabels[t]}</button>`).join('')}
+        <span class="sep">|</span>
+        ${optTypes.map(t => `<button class="pill${tradesOptType===t?' active':''}" onclick="setTradesOptType('${t}')">${optLabels[t]}</button>`).join('')}
+        ${allTickers.length > 1 ? `<span class="sep">|</span>
+        <button class="pill${tradesTickerFilter==='all'?' active':''}" onclick="setTradesTicker('all')">All Tickers</button>
+        ${allTickers.map(t => `<button class="pill${tradesTickerFilter===t?' active':''}" onclick="setTradesTicker('${t}')">${t}</button>`).join('')}` : ''}
       </div>`;
 
-    // Summary stats
-    const totalPnL    = closed.reduce((s,t) => s+t.pnl, 0);
-    const winners     = closed.filter(t => t.pnl > 0);
-    const losers      = closed.filter(t => t.pnl < 0);
-    const winRate     = closed.length ? (winners.length/closed.length*100) : 0;
-    const avgWin      = winners.length ? winners.reduce((s,t)=>s+t.pnl,0)/winners.length : 0;
-    const avgLoss     = losers.length  ? losers.reduce((s,t)=>s+t.pnl,0)/losers.length  : 0;
-    const grossWin    = winners.reduce((s,t)=>s+t.pnl,0);
-    const grossLoss   = Math.abs(losers.reduce((s,t)=>s+t.pnl,0));
-    const profitFactor = grossLoss > 0 ? (grossWin/grossLoss).toFixed(2) : '∞';
+    // Summary stats (contract-level)
+    const totalPnL = filteredTrades.reduce((s,t) => s+t.totalPnL, 0);
+    const winners  = filteredTrades.filter(t => t.totalPnL > 0);
+    const losers   = filteredTrades.filter(t => t.totalPnL < 0);
+    const winRate  = filteredTrades.length ? (winners.length/filteredTrades.length*100) : 0;
+    const avgWinR  = winners.filter(t => t.rMultiple !== null);
+    const avgLossR = losers.filter(t => t.rMultiple !== null);
+    const avgWR    = avgWinR.length ? avgWinR.reduce((s,t) => s + t.rMultiple, 0) / avgWinR.length : 0;
+    const avgLR    = avgLossR.length ? Math.abs(avgLossR.reduce((s,t) => s + t.rMultiple, 0) / avgLossR.length) : 0;
+    const rrNum    = avgLR > 0 ? avgWR / avgLR : null;
+    const rrRatio  = rrNum !== null ? rrNum.toFixed(1) + ':1' : '—';
+    const breakeven = rrNum !== null ? (1 / (1 + rrNum)) * 100 : null;
 
-    // Cumulative P&L chart data
-    let cumPnL = 0;
-    const cumData = closed.map(t => { cumPnL += t.pnl; return { date: t.closeTime.slice(0,10), cum: cumPnL }; });
+    // R stats (contract-level)
+    const RECENT_N = 10;
+    const rStats = buildRStats(filteredTrades);
+    const recentTrades = filteredTrades.slice(-RECENT_N);
+    const rStatsRecent = buildRStats(recentTrades);
+    const dayTrades   = filteredTrades.filter(t => t.daysHeld === 0);
+    const swingTrades = filteredTrades.filter(t => t.daysHeld > 0);
+    const rStatsDT    = buildRStats(dayTrades);
+    const rStatsSW    = buildRStats(swingTrades);
+    const discStats   = buildDisciplineStats(filteredTrades);
+    const discStatsRecent = buildDisciplineStats(recentTrades);
+
+    // Cumulative chart data (P&L or R)
+    let cumVal = 0;
+    const cumData = filteredTrades.map(t => {
+      if (tradesCumMode === 'r' && t.rMultiple !== null) cumVal += t.rMultiple;
+      else cumVal += t.totalPnL;
+      return { date: (t.closeTime || '').slice(0,10), cum: cumVal };
+    });
 
     function fmtDate2(s) { return s ? s.slice(5,10).replace('-','/') : '—'; }
     function fmtDt(s) { return s ? s.slice(0,10) : '—'; }
+    function fmtR(r) { return r !== null ? (r >= 0 ? '+' : '') + r.toFixed(2) + 'R' : '—'; }
+    function fmtSizePct(p) { return p !== null ? (p * 100).toFixed(1) + '%' : '—'; }
+
+    function warnCls(recent, allTime, worse) {
+      if (recent === null || allTime === null) return '';
+      return worse(recent, allTime) ? 'neg' : '';
+    }
+
+    function compRow(label, allVal, recentVal, format, worseCheck) {
+      const wCls = (recentVal !== null && allVal !== null && worseCheck && worseCheck(recentVal, allVal)) ? ' neg' : '';
+      return `<tr>
+        <td style="color:var(--text-1);font-weight:500">${label}</td>
+        <td>${format(allVal)}</td>
+        <td class="${wCls}">${format(recentVal)}</td>
+      </tr>`;
+    }
+
+    const rStatsHtml = filteredTrades.length > 0 ? `
+      <div class="section-title">Risk & Sizing <span style="font-size:0.65rem;color:var(--text-3);letter-spacing:0.06em;text-transform:none">(All vs Last ${RECENT_N})</span></div>
+      <div class="trades-table-wrap">
+        <table class="trades-table">
+          <thead><tr>
+            <th>Metric</th><th>All (${filteredTrades.length})</th><th>Last ${Math.min(RECENT_N, filteredTrades.length)}</th>
+          </tr></thead>
+          <tbody>
+            ${compRow('Avg Size %', rStats.avgSize, rStatsRecent.avgSize, fmtSizePct, function(r,a){return r>a*1.3})}
+            ${compRow('Max Size %', rStats.maxSize, rStatsRecent.maxSize, fmtSizePct, function(r,a){return r>a*1.3})}
+            ${compRow('Avg Win R', rStats.avgWinR, rStatsRecent.avgWinR, fmtR, function(r,a){return r<a})}
+            ${compRow('Avg Loss R', rStats.avgLossR, rStatsRecent.avgLossR, fmtR, function(r,a){return r<a})}
+          </tbody>
+        </table>
+      </div>` : `
+      <div class="section-title">Risk & Sizing</div>
+      <div class="trades-summary">
+        <div class="tstat"><span class="tstat-label">Avg Size %</span><span class="tstat-val">—</span></div>
+        <div class="tstat"><span class="tstat-label">Max Size %</span><span class="tstat-val">—</span></div>
+        <div class="tstat"><span class="tstat-label">Avg Win R</span><span class="tstat-val">—</span></div>
+        <div class="tstat"><span class="tstat-label">Avg Loss R</span><span class="tstat-val">—</span></div>
+      </div>`;
+
+    function fmtHold(d) { return d !== null ? (d < 1 ? '<1d' : d.toFixed(1) + 'd') : '—'; }
+    function fmtFreq(f) { return f !== null ? f.toFixed(1) + '/wk' : '—'; }
+    function fmtDD(s) { return s && s.maxDD ? fmtS(-s.maxDD) : '—'; }
+
+    const discHtml = filteredTrades.length > 0 ? `
+      <div class="section-title">Discipline <span style="font-size:0.65rem;color:var(--text-3);letter-spacing:0.06em;text-transform:none">(All vs Last ${RECENT_N})</span></div>
+      <div class="trades-table-wrap">
+        <table class="trades-table">
+          <thead><tr>
+            <th>Metric</th><th>All (${filteredTrades.length})</th><th>Last ${Math.min(RECENT_N, filteredTrades.length)}</th>
+          </tr></thead>
+          <tbody>
+            ${compRow('Max Drawdown', discStats, discStatsRecent, fmtDD, null)}
+            ${compRow('Avg Hold (Win)', discStats.avgHoldWin, discStatsRecent.avgHoldWin, fmtHold, null)}
+            ${compRow('Avg Hold (Loss)', discStats.avgHoldLoss, discStatsRecent.avgHoldLoss, fmtHold, function(r,a){return r>a*1.3})}
+            ${compRow('Trade Freq', discStats.tradesPerWeek, discStatsRecent.tradesPerWeek, fmtFreq, function(r,a){return r>a*1.5})}
+            ${compRow('Max Loss Streak', discStats.maxStreak, discStatsRecent.maxStreak, function(v){return v!=null?v.toString():'—'}, function(r,a){return r>a})}
+          </tbody>
+        </table>
+      </div>` : `
+      <div class="section-title">Discipline</div>
+      <div class="trades-summary">
+        <div class="tstat"><span class="tstat-label">Max Drawdown</span><span class="tstat-val">—</span></div>
+        <div class="tstat"><span class="tstat-label">Avg Hold (Win)</span><span class="tstat-val">—</span></div>
+        <div class="tstat"><span class="tstat-label">Avg Hold (Loss)</span><span class="tstat-val">—</span></div>
+        <div class="tstat"><span class="tstat-label">Trade Freq</span><span class="tstat-val">—</span></div>
+        <div class="tstat"><span class="tstat-label">Max Loss Streak</span><span class="tstat-val">—</span></div>
+      </div>`;
 
     wrap.innerHTML = `
       ${filterBar}
@@ -1274,14 +1547,22 @@ document.getElementById('h-total').textContent = fmt(endVal);
       <div class="trades-summary">
         <div class="tstat"><span class="tstat-label">Total P&L</span><span class="tstat-val ${cls(totalPnL)}">${fmtS(totalPnL)}</span></div>
         <div class="tstat"><span class="tstat-label">Win Rate</span><span class="tstat-val ${winRate>=50?'pos':'neg'}">${winRate.toFixed(1)}%</span></div>
-        <div class="tstat"><span class="tstat-label">Trades</span><span class="tstat-val">${closed.length}</span></div>
-        <div class="tstat"><span class="tstat-label">Avg Winner</span><span class="tstat-val pos">${fmtS(avgWin)}</span></div>
-        <div class="tstat"><span class="tstat-label">Avg Loser</span><span class="tstat-val neg">${fmtS(avgLoss)}</span></div>
-        <div class="tstat"><span class="tstat-label">Profit Factor</span><span class="tstat-val ${profitFactor>=1?'pos':'neg'}">${profitFactor}</span></div>
+        <div class="tstat"><span class="tstat-label">Trades</span><span class="tstat-val">${filteredTrades.length}</span></div>
+        <div class="tstat"><span class="tstat-label">R:R</span><span class="tstat-val">${rrRatio}</span></div>
+        <div class="tstat"><span class="tstat-label">Breakeven WR</span><span class="tstat-val">${breakeven !== null ? breakeven.toFixed(1) + '%' : '—'}</span></div>
       </div>
 
+      ${rStatsHtml}
+      ${discHtml}
+
       <div class="chart-wrap" style="padding:1.2rem 1.6rem">
-        <div class="section-title" style="margin-bottom:0.8rem">Cumulative P&L</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.8rem">
+          <div class="section-title" style="margin:0">Equity Curve</div>
+          <div style="display:flex;gap:0.35rem">
+            <button class="pill${tradesCumMode==='pnl'?' active':''}" onclick="setTradesCumMode('pnl')">P&L</button>
+            <button class="pill${tradesCumMode==='r'?' active':''}" onclick="setTradesCumMode('r')">R</button>
+          </div>
+        </div>
         <canvas id="trades-chart" style="display:block;width:100%"></canvas>
       </div>
 
@@ -1310,8 +1591,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
         </table>
       </div>` : ''}
 
-      ${renderTickerSummary(closed)}
-      ${renderTypeSummary(closed)}`;
+      ${renderTradeLog(filteredTrades)}`;
 
     // Draw cumulative P&L chart
     setTimeout(() => {
@@ -1351,7 +1631,8 @@ document.getElementById('h-total').textContent = fmt(endVal);
         const y=yP(v);
         ctx.beginPath(); ctx.moveTo(pad.left,y); ctx.lineTo(pad.left+cW,y); ctx.stroke();
         ctx.font='11px DM Mono,monospace'; ctx.fillStyle='#6B7390'; ctx.textAlign='right';
-        ctx.fillText((v>=0?'+':'')+fmtS(v), pad.left-6, y+4);
+        const yLabel = tradesCumMode === 'r' ? (v>=0?'+':'') + v.toFixed(1) + 'R' : (v>=0?'+':'') + fmtS(v);
+        ctx.fillText(yLabel, pad.left-6, y+4);
       }
 
       // X labels
