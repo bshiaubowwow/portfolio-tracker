@@ -1270,7 +1270,34 @@ document.getElementById('h-total').textContent = fmt(endVal);
       if (!bySymbol[lot.symbol]) bySymbol[lot.symbol] = { lots: [], parsed: lot.parsed };
       bySymbol[lot.symbol].lots.push(lot);
     });
-    const trades = Object.entries(bySymbol).map(([symbol, { lots, parsed }]) => {
+    // Split into separate trades when position goes flat between entries
+    const allGroups = [];
+    Object.entries(bySymbol).forEach(([symbol, { lots, parsed }]) => {
+      if (!lots.length) return;
+      lots.sort((a, b) => parseTradeDate(a.openTime) - parseTradeDate(b.openTime));
+      const groups = [];
+      function safeParseClose(t) {
+        var d = parseTradeDate(t.replace(/\s*\(.*\)$/, ''));
+        return isNaN(d) ? new Date(0) : d;
+      }
+      let current = [lots[0]];
+      let maxClose = safeParseClose(lots[0].closeTime);
+      for (let i = 1; i < lots.length; i++) {
+        const lotOpen = parseTradeDate(lots[i].openTime);
+        if (lotOpen > maxClose) {
+          groups.push({ symbol, parsed, lots: current });
+          current = [lots[i]];
+          maxClose = safeParseClose(lots[i].closeTime);
+        } else {
+          current.push(lots[i]);
+          const lc = safeParseClose(lots[i].closeTime);
+          if (lc > maxClose) maxClose = lc;
+        }
+      }
+      groups.push({ symbol, parsed, lots: current });
+      allGroups.push(...groups);
+    });
+    const trades = allGroups.map(({ symbol, parsed, lots }) => {
       const totalCost = lots.reduce((s, l) => s + l.entryPrice * l.qty * 100, 0);
       const totalPnL  = lots.reduce((s, l) => s + l.pnl, 0);
       const totalQty  = lots.reduce((s, l) => s + l.qty, 0);
@@ -1313,6 +1340,8 @@ document.getElementById('h-total').textContent = fmt(endVal);
       const json = await res.json();
       if (json.error) throw new Error(json.error);
       _tradesData   = reconstructTrades(json.data);
+      console.log('Closed lots:', _tradesData.closed.map(t => ({sym: t.symbol, qty: t.qty, entry: t.entryPrice, exit: t.exitPrice, pnl: t.pnl})));
+      console.log('Open:', _tradesData.open.map(t => ({sym: t.symbol, qty: t.qty, entry: t.entryPrice, cost: t.totalCost})));
       try { _tradesData = await resolveSettlements(_tradesData); } catch(se) {}
       _tradesLoaded = true;
       renderTrades();
@@ -1431,40 +1460,94 @@ document.getElementById('h-total').textContent = fmt(endVal);
   function renderBucketAnalysis(trades) {
     if (!trades.length) return '';
     const metrics = {
-      tradesPerDay: { label: 'Trades per Day', bucketFn: function(t, allTrades) {
-        const key = t.lastClose.toDateString();
-        const dayCount = allTrades.filter(tr => tr.lastClose.toDateString() === key).length;
-        if (dayCount <= 2) return '1–2';
-        if (dayCount <= 4) return '3–4';
-        return '5+';
-      }},
-      sizePct: { label: 'Position Size', bucketFn: function(t) {
-        if (t.sizePct === null) return null;
-        const pct = t.sizePct * 100;
-        if (pct <= 3) return '≤3%';
-        if (pct <= 5) return '3–5%';
-        if (pct <= 8) return '5–8%';
-        return '8%+';
-      }},
-      tradeNumInDay: { label: 'Trade # in Day', bucketFn: function(t, allTrades) {
-        const key = t.lastClose.toDateString();
-        const dayTrades = allTrades.filter(tr => tr.lastClose.toDateString() === key).sort((a,b) => a.firstOpen - b.firstOpen);
-        const idx = dayTrades.indexOf(t) + 1;
-        if (idx <= 1) return '1st';
-        if (idx <= 2) return '2nd';
-        if (idx <= 3) return '3rd';
-        return '4th+';
-      }},
+      tradesPerDay: { label: 'Trades per Day', bucketFn: null, dynamicDay: true },
+      sizePct: { label: 'Position Size', bucketFn: null, dynamic: true },
+      tradeNumInDay: { label: 'Trade # in Day', bucketFn: null, dynamicTradeNum: true },
     };
 
     const metric = metrics[bucketMetric];
     const buckets = {};
-    trades.forEach(t => {
-      const bucket = metric.bucketFn(t, trades);
-      if (bucket === null) return;
-      if (!buckets[bucket]) buckets[bucket] = [];
-      buckets[bucket].push(t);
-    });
+    if (metric.dynamicTradeNum) {
+      const dayGroups = {};
+      trades.forEach(t => {
+        const key = t.lastClose.toDateString();
+        if (!dayGroups[key]) dayGroups[key] = [];
+        dayGroups[key].push(t);
+      });
+      Object.values(dayGroups).forEach(dayTrades => {
+        dayTrades.sort((a,b) => a.firstOpen - b.firstOpen);
+      });
+      const tradeIdx = new Map();
+      Object.values(dayGroups).forEach(dayTrades => {
+        dayTrades.forEach((t, i) => { tradeIdx.set(t, i + 1); });
+      });
+      const indices = trades.map(t => tradeIdx.get(t) || 1);
+      const maxIdx = Math.max(...indices);
+      if (maxIdx <= 1) { buckets['#1'] = trades.slice(); }
+      else {
+        const q1 = Math.ceil(maxIdx * 0.25);
+        const q2 = Math.ceil(maxIdx * 0.5);
+        const q3 = Math.ceil(maxIdx * 0.75);
+        trades.forEach((t, i) => {
+          const idx = indices[i];
+          var label;
+          if (q1 === q2 && q2 === q3) { label = '#' + idx; }
+          else if (idx <= q1) label = '#1–' + q1;
+          else if (idx <= q2) label = '#' + (q1+1) + '–' + q2;
+          else if (idx <= q3) label = '#' + (q2+1) + '–' + q3;
+          else label = '#' + (q3+1) + '+';
+          if (!buckets[label]) buckets[label] = [];
+          buckets[label].push(t);
+        });
+      }
+    } else if (metric.dynamicDay) {
+      const dayCounts = {};
+      trades.forEach(t => {
+        const key = t.lastClose.toDateString();
+        if (!dayCounts[key]) dayCounts[key] = 0;
+        dayCounts[key]++;
+      });
+      const counts = Object.values(dayCounts).sort((a,b) => a - b);
+      if (!counts.length) return '';
+      const q1 = counts[Math.floor(counts.length * 0.25)];
+      const q2 = counts[Math.floor(counts.length * 0.5)];
+      const q3 = counts[Math.floor(counts.length * 0.75)];
+      trades.forEach(t => {
+        const key = t.lastClose.toDateString();
+        const dc = dayCounts[key];
+        var label;
+        if (q1 === q2 && q2 === q3) { label = dc + ' trades'; }
+        else if (dc <= q1) label = '≤' + q1;
+        else if (dc <= q2) label = (q1+1) + '–' + q2;
+        else if (dc <= q3) label = (q2+1) + '–' + q3;
+        else label = (q3+1) + '+';
+        if (!buckets[label]) buckets[label] = [];
+        buckets[label].push(t);
+      });
+    } else if (metric.dynamic) {
+      const valid = trades.filter(t => t.sizePct !== null).sort((a,b) => a.sizePct - b.sizePct);
+      if (!valid.length) return '';
+      const q1 = valid[Math.floor(valid.length * 0.25)].sizePct;
+      const q2 = valid[Math.floor(valid.length * 0.5)].sizePct;
+      const q3 = valid[Math.floor(valid.length * 0.75)].sizePct;
+      trades.forEach(t => {
+        if (t.sizePct === null) return;
+        var label;
+        if (t.sizePct <= q1) label = '≤' + Math.round(q1*100) + '%';
+        else if (t.sizePct <= q2) label = Math.round(q1*100) + '–' + Math.round(q2*100) + '%';
+        else if (t.sizePct <= q3) label = Math.round(q2*100) + '–' + Math.round(q3*100) + '%';
+        else label = Math.round(q3*100) + '%+';
+        if (!buckets[label]) buckets[label] = [];
+        buckets[label].push(t);
+      });
+    } else {
+      trades.forEach(t => {
+        const bucket = metric.bucketFn(t, trades);
+        if (bucket === null) return;
+        if (!buckets[bucket]) buckets[bucket] = [];
+        buckets[bucket].push(t);
+      });
+    }
 
     const bucketOrder = Object.keys(buckets);
     const rows = bucketOrder.map(b => {
@@ -1678,7 +1761,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
           sortTh('Underlying', 'underlying') + sortTh('Type', 'type') + sortTh('Strike', 'strike') + sortTh('Expiry', 'expiry') +
           sortTh('P&L', 'pnl') + (hasR ? sortTh('R', 'r') + sortTh('Size %', 'sizePct') : '') +
           sortTh('Cost Basis', 'cost') + sortTh('Qty', 'qty') +
-          sortTh('Closed', 'closeTime') + sortTh('Days Held', 'days') +
+          sortTh('Closed', 'closeTime') + sortTh('Time Held', 'days') +
         '</tr></thead>' +
         '<tbody>' + sorted.map(function(t) {
           var wl = t.totalPnL > 0 ? '<span class="pos">W</span>' : t.totalPnL < 0 ? '<span class="neg">L</span>' : '—';
@@ -1696,7 +1779,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
           '<td>' + fmt(t.totalCost) + '</td>' +
           '<td>' + t.totalQty + '</td>' +
           '<td>' + fmtDt(t.closeTime) + '</td>' +
-          '<td>' + t.daysHeld + 'd</td>' +
+          '<td>' + (function(ms){if(!ms)return'0m';var m=ms/60000;if(m<60)return Math.round(m)+'m';var h=m/60;if(h<24)return h.toFixed(1)+'h';return Math.round(h/24)+'d'})(t.holdMs) + '</td>' +
         '</tr>'; }).join('') +
         '</tbody>' +
       '</table>' +
@@ -2006,33 +2089,27 @@ document.getElementById('h-total').textContent = fmt(endVal);
         </div>
       </div>
 
-      ${open.length > 0 ? `
-      <div class="section-title">Open Positions <span class="badge badge-open" style="font-size:0.7rem;vertical-align:middle">${open.length}</span></div>
-      <div class="trades-table-wrap">
-        <table class="trades-table">
-          <thead><tr>
-            <th>Underlying</th><th>Type</th><th>Strike</th><th>Expiry</th>
-            <th>Qty</th><th>Avg Entry</th><th>Total Cost</th><th>Opened</th><th>Days Held</th>
-          </tr></thead>
-          <tbody>${open.map(t => {
-            const days = Math.round((Date.now() - parseTradeDate(t.openTime)) / 86400000);
-            return `<tr>
-              <td style="color:var(--text-1);font-weight:500">${t.parsed.underlying}</td>
-              <td><span class="badge ${t.parsed.type==='Call'?'badge-call':'badge-put'}">${t.parsed.type}</span></td>
-              <td>$${t.parsed.strike.toFixed(0)}</td>
-              <td>${t.parsed.expiryDisplay}</td>
-              <td>${t.qty}</td>
-              <td>$${t.entryPrice.toFixed(2)}</td>
-              <td class="neg">-${fmt(t.totalCost)}</td>
-              <td>${fmtDt(t.openTime)}</td>
-              <td>${days}d</td>
-            </tr>`;
-          }).join('')}</tbody>
-        </table>
-      </div>` : ''}
 
       ${renderBucketAnalysis(filteredTrades)}
       ${renderTimeOfDay(filteredTrades)}
+
+      ${open.length > 0 ? '<div class="section-title">Open Positions <span class="badge badge-open" style="font-size:0.7rem;vertical-align:middle">' + open.length + '</span></div>' +
+      '<div class="trades-table-wrap"><table class="trades-table"><thead><tr>' +
+      '<th>Underlying</th><th>Type</th><th>Strike</th><th>Expiry</th><th>Qty</th><th>Avg Entry</th><th>Total Cost</th><th>Opened</th><th>Days Held</th>' +
+      '</tr></thead><tbody>' + open.map(function(t) {
+        var days = Math.round((Date.now() - parseTradeDate(t.openTime)) / 86400000);
+        return '<tr>' +
+          '<td style="color:var(--text-1);font-weight:500">' + t.parsed.underlying + '</td>' +
+          '<td><span class="badge ' + (t.parsed.type==='Call'?'badge-call':'badge-put') + '">' + t.parsed.type + '</span></td>' +
+          '<td>$' + t.parsed.strike.toFixed(0) + '</td>' +
+          '<td>' + t.parsed.expiryDisplay + '</td>' +
+          '<td>' + t.qty + '</td>' +
+          '<td>$' + t.entryPrice.toFixed(2) + '</td>' +
+          '<td class="neg">-' + fmt(t.totalCost) + '</td>' +
+          '<td>' + fmtDt(t.openTime) + '</td>' +
+          '<td>' + days + 'd</td></tr>';
+      }).join('') + '</tbody></table></div>' : ''}
+
       ${renderTradeLog(filteredTrades)}`;
 
     // Draw equity curve chart
