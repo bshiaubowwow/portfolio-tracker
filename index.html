@@ -1609,6 +1609,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
       tradesPerDay: { label: 'Trades per Day', bucketFn: null, dynamicDay: true },
       sizePct: { label: 'Position Size', bucketFn: null, dynamic: true },
       tradeNumInDay: { label: 'Trade # in Day', bucketFn: null, dynamicTradeNum: true },
+      dayOfWeek: { label: 'Day of Week', bucketFn: null, dynamicDow: true },
     };
 
     const metric = metrics[bucketMetric];
@@ -1646,6 +1647,13 @@ document.getElementById('h-total').textContent = fmt(endVal);
           buckets[label].push(t);
         });
       }
+    } else if (metric.dynamicDow) {
+      const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+      trades.forEach(t => {
+        const label = dayNames[t.lastClose.getDay()];
+        if (!buckets[label]) buckets[label] = [];
+        buckets[label].push(t);
+      });
     } else if (metric.dynamicDay) {
       const dayCounts = {};
       trades.forEach(t => {
@@ -1695,7 +1703,11 @@ document.getElementById('h-total').textContent = fmt(endVal);
       });
     }
 
-    const bucketOrder = Object.keys(buckets);
+    let bucketOrder = Object.keys(buckets);
+    if (metric.dynamicDow) {
+      const dowOrder = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      bucketOrder = dowOrder.filter(d => buckets[d]);
+    }
     const rows = bucketOrder.map(b => {
       const bTrades = buckets[b];
       const count = bTrades.length;
