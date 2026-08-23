@@ -2472,6 +2472,11 @@ document.getElementById('h-total').textContent = fmt(endVal);
   }
 
   loadData();
+
+  // Register service worker for offline shell caching
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/portfolio-tracker/sw.js').catch(() => {});
+  }
 </script>
 </body>
 </html>
