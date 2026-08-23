@@ -1227,21 +1227,10 @@ document.getElementById('h-total').textContent = fmt(endVal);
     if (cache[key] !== undefined) return cache[key];
 
     try {
-      const proxyUrl = 'https://api.allorigins.win/raw?url=';
-      const d = new Date(dateStr + 'T00:00:00');
-      const from = Math.floor(d.getTime() / 1000) - 86400;
-      const to = Math.floor(d.getTime() / 1000) + 172800;
-      const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${from}&period2=${to}&interval=1d`;
-      const res = await fetch(proxyUrl + encodeURIComponent(yahooUrl));
+      const url = API + '?action=settlement&ticker=' + encodeURIComponent(ticker) + '&date=' + encodeURIComponent(dateStr);
+      const res = await fetch(url);
       const json = await res.json();
-      const timestamps = json.chart.result[0].timestamp;
-      const closes = json.chart.result[0].indicators.quote[0].close;
-      const targetTs = d.getTime() / 1000;
-      let best = -1;
-      for (let i = 0; i < timestamps.length; i++) {
-        if (timestamps[i] <= targetTs + 86400) best = i;
-      }
-      const close = best >= 0 ? closes[best] : null;
+      const close = json.close;
       if (close != null) {
         cache[key] = close;
         setSettlementCache(cache);
