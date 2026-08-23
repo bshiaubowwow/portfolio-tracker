@@ -1503,8 +1503,8 @@ document.getElementById('h-total').textContent = fmt(endVal);
   }
 
   function renderRollingChart(trades) {
-    if (trades.length < 10) return '';
     const WINDOW = 10;
+    if (trades.length < WINDOW) return '<div class="section-title">Rolling ' + WINDOW + ' Trades</div><div class="chart-wrap" style="padding:1.2rem 1.6rem"><p style="font-family:var(--mono);font-size:0.8rem;color:var(--text-3)">Need ' + WINDOW + '+ trades to display</p></div>';
     const metrics = {
       avgPnL: { label: 'Avg P&L', fn: function(slice) { return slice.length ? slice.reduce(function(s,t){return s+t.totalPnL},0)/slice.length : 0; }, fmt: function(v){return (v>=0?'+':'')+fmtN(v);} },
       winRate: { label: 'Win Rate', fn: function(slice) { var wins = slice.filter(function(t){return t.totalPnL>0}).length; return slice.length ? wins/slice.length*100 : 0; }, fmt: function(v){return v.toFixed(0)+'%';} },
@@ -1516,7 +1516,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
       var slice = trades.slice(i-WINDOW+1, i+1);
       points.push({ idx: i, val: m.fn(slice) });
     }
-    if (!points.length) return '';
+    if (!points.length) return '<div class="section-title">Rolling ' + WINDOW + ' Trades</div><div class="chart-wrap" style="padding:1.2rem 1.6rem"><p style="font-family:var(--mono);font-size:0.8rem;color:var(--text-3)">No data for selected filters</p></div>';
     var options = Object.entries(metrics).map(function(e){return '<option value="'+e[0]+'"'+(e[0]===rollingMetric?' selected':'')+'>'+e[1].label+'</option>';}).join('');
     return '<div class="section-title">Rolling ' + WINDOW + ' Trades</div>' +
       '<div class="chart-wrap" style="padding:1.2rem 1.6rem">' +
@@ -1604,7 +1604,6 @@ document.getElementById('h-total').textContent = fmt(endVal);
   }
 
   function renderBucketAnalysis(trades) {
-    if (!trades.length) return '';
     const metrics = {
       tradesPerDay: { label: 'Trades per Day', bucketFn: null, dynamicDay: true },
       sizePct: { label: 'Position Size', bucketFn: null, dynamic: true },
@@ -1613,6 +1612,12 @@ document.getElementById('h-total').textContent = fmt(endVal);
     };
 
     const metric = metrics[bucketMetric];
+    const options = Object.entries(metrics).map(([k,v]) =>
+      '<option value="' + k + '"' + (k === bucketMetric ? ' selected' : '') + '>' + v.label + '</option>'
+    ).join('');
+    if (!trades.length) return `<div class="section-title">Performance by Factor</div>
+      <div style="margin-bottom:0.8rem"><select onchange="setBucketMetric(this.value)" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);font-family:var(--mono);font-size:0.78rem;padding:0.35rem 0.6rem;border-radius:3px;outline:none;cursor:pointer">${options}</select></div>
+      <div class="trades-table-wrap"><p style="font-family:var(--mono);font-size:0.8rem;color:var(--text-3);padding:1rem">No trades for selected filters</p></div>`;
     const buckets = {};
     if (metric.dynamicTradeNum) {
       const dayGroups = {};
@@ -1662,7 +1667,9 @@ document.getElementById('h-total').textContent = fmt(endVal);
         dayCounts[key]++;
       });
       const counts = Object.values(dayCounts).sort((a,b) => a - b);
-      if (!counts.length) return '';
+      if (!counts.length) return `<div class="section-title">Performance by Factor</div>
+      <div style="margin-bottom:0.8rem"><select onchange="setBucketMetric(this.value)" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);font-family:var(--mono);font-size:0.78rem;padding:0.35rem 0.6rem;border-radius:3px;outline:none;cursor:pointer">${options}</select></div>
+      <div class="trades-table-wrap"><p style="font-family:var(--mono);font-size:0.8rem;color:var(--text-3);padding:1rem">No data for selected filters</p></div>`;
       const q1 = counts[Math.floor(counts.length * 0.25)];
       const q2 = counts[Math.floor(counts.length * 0.5)];
       const q3 = counts[Math.floor(counts.length * 0.75)];
@@ -1680,7 +1687,9 @@ document.getElementById('h-total').textContent = fmt(endVal);
       });
     } else if (metric.dynamic) {
       const valid = trades.filter(t => t.sizePct !== null).sort((a,b) => a.sizePct - b.sizePct);
-      if (!valid.length) return '';
+      if (!valid.length) return `<div class="section-title">Performance by Factor</div>
+      <div style="margin-bottom:0.8rem"><select onchange="setBucketMetric(this.value)" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);font-family:var(--mono);font-size:0.78rem;padding:0.35rem 0.6rem;border-radius:3px;outline:none;cursor:pointer">${options}</select></div>
+      <div class="trades-table-wrap"><p style="font-family:var(--mono);font-size:0.8rem;color:var(--text-3);padding:1rem">No size data — need WB Daily entries</p></div>`;
       const q1 = valid[Math.floor(valid.length * 0.25)].sizePct;
       const q2 = valid[Math.floor(valid.length * 0.5)].sizePct;
       const q3 = valid[Math.floor(valid.length * 0.75)].sizePct;
@@ -1718,10 +1727,6 @@ document.getElementById('h-total').textContent = fmt(endVal);
       return { bucket: b, count, winRate, avgPnL, totalPnL };
     });
 
-    const options = Object.entries(metrics).map(([k,v]) =>
-      '<option value="' + k + '"' + (k === bucketMetric ? ' selected' : '') + '>' + v.label + '</option>'
-    ).join('');
-
     return `<div class="section-title">Performance by Factor</div>
     <div style="margin-bottom:0.8rem">
       <select onchange="setBucketMetric(this.value)" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);font-family:var(--mono);font-size:0.78rem;padding:0.35rem 0.6rem;border-radius:3px;outline:none;cursor:pointer">
@@ -1746,7 +1751,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
 
   function renderTimeOfDay(trades) {
     const dayTrades = trades.filter(t => t.daysHeld === 0);
-    if (!dayTrades.length) return '';
+    if (!dayTrades.length) return '<div class="section-title">Performance by Time of Day</div><div class="trades-table-wrap"><p style="font-family:var(--mono);font-size:0.8rem;color:var(--text-3);padding:1rem">No day trades for selected filters</p></div>';
     const bySlot = {};
     dayTrades.forEach(t => {
       const d = parseTradeDate(t.openTime);
@@ -1760,7 +1765,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
       bySlot[slot].push(t);
     });
     const allSlots = Object.keys(bySlot).map(Number).sort((a,b) => a - b);
-    if (!allSlots.length) return '';
+    if (!allSlots.length) return '<div class="section-title">Performance by Time of Day</div><div class="trades-table-wrap"><p style="font-family:var(--mono);font-size:0.8rem;color:var(--text-3);padding:1rem">No day trades for selected filters</p></div>';
     function slotLabel(slot) {
       const hr = Math.floor(slot / 2);
       const min = (slot % 2) * 30;
@@ -1869,7 +1874,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
   }
 
   function renderTradeLog(trades) {
-    if (!trades.length) return '';
+    if (!trades.length) return '<div class="section-title">Trade Log</div><div class="trades-table-wrap"><p style="font-family:var(--mono);font-size:0.8rem;color:var(--text-3);padding:1rem">No trades for selected filters</p></div>';
     function fmtSizePct(p) { return p !== null ? Math.round(p * 100) + '%' : '—'; }
     function fmtDt(s) {
       if (!s) return '—';
