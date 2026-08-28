@@ -1049,9 +1049,9 @@ document.getElementById('h-total').textContent = fmt(endVal);
   }
 
   // ── TRADES ──
-  const TRADES_URL = API + '?tab=WB%20Brokerage%20Trades';
-  const DAILY_URL  = API + '?tab=WB%20Daily';
-  let _dailyData   = null; // [{Date, Balance, RiskPct}]
+  function tradesUrl() { return API + '?tab=WB%20Brokerage%20Trades&_=' + Date.now(); }
+  function dailyUrl() { return API + '?tab=WB%20Daily&_=' + Date.now(); }
+  let _dailyData   = null;
 
   function parseCSV(text) {
     const lines = text.trim().split('\n');
@@ -1124,7 +1124,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
       });
       const today = new Date(); today.setHours(0,0,0,0);
       const expiryDate = parsed.expiry ? new Date(parsed.expiry + 'T00:00:00') : null;
-      const isExpired  = expiryDate && expiryDate <= today;
+      const isExpired  = expiryDate && expiryDate < today;
       queue.forEach(b => {
         if (b.qty <= 0) return;
         if (isExpired) {
@@ -1190,7 +1190,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
     const { closed, open } = data;
     const toResolve = closed.filter(t =>
       t.expired && t.exitPrice === 0 &&
-      (t.parsed.underlying === 'SPX' || t.parsed.underlying === 'SPXW' || t.parsed.underlying === 'XSP' || t.parsed.underlying === 'SPY')
+      (t.parsed.underlying === 'SPX' || t.parsed.underlying === 'SPXW' || t.parsed.underlying === 'XSP')
     );
     if (!toResolve.length) return data;
 
@@ -1223,9 +1223,8 @@ document.getElementById('h-total').textContent = fmt(endVal);
 
   async function loadDaily() {
     try {
-      const res = await fetch(DAILY_URL);
+      const res = await fetch(dailyUrl());
       const json = await res.json();
-      console.log('WB Daily raw keys:', json.data && json.data.length ? Object.keys(json.data[0]) : 'no data');
       if (json.error) return;
       function normalizeDate(val) {
         if (!val) return '';
@@ -1238,15 +1237,8 @@ document.getElementById('h-total').textContent = fmt(endVal);
         .map(r => ({
           date: normalizeDate(r['Date']),
           balance: parseFloat(String(r['Starting Balance']).replace(/[$,]/g,'')) || 0,
-          riskPct: r['Risk %'] != null ? (function(v) { var n = parseFloat(String(v).replace('%','')); return n > 1 ? n / 100 : n; })(r['Risk %']) : null,
         }))
         .sort((a,b) => new Date(a.date) - new Date(b.date));
-      // Forward-fill riskPct
-      let lastRisk = 1;
-      _dailyData.forEach(d => {
-        if (d.riskPct !== null && !isNaN(d.riskPct)) lastRisk = d.riskPct;
-        else d.riskPct = lastRisk;
-      });
     } catch(e) { console.error('Daily load error:', e); }
   }
 
@@ -1312,15 +1304,12 @@ document.getElementById('h-total').textContent = fmt(endVal);
       const expired = lots.some(l => l.expired);
       const daily = lookupDaily(lots[0].openTime);
       const balance = daily ? daily.balance : null;
-      const riskPct = daily ? daily.riskPct : 1;
       const sizePct = balance ? totalCost / balance : null;
-      const oneR    = totalCost * riskPct;
-      const rMultiple = oneR > 0 ? totalPnL / oneR : null;
       return {
         symbol, parsed, totalCost, totalPnL, totalQty,
         openTime: lots[0].openTime, closeTime: lots[lots.length-1].closeTime,
         firstOpen, lastClose, expired,
-        sizePct, riskPct, oneR, rMultiple,
+        sizePct,
         avgEntry: totalCost / (totalQty * 100),
         pnlPct: totalCost > 0 ? (totalPnL / totalCost) * 100 : 0,
         holdMs: Math.max(0, lastClose - firstOpen),
@@ -1336,7 +1325,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
     wrap.innerHTML = '<div class="status-banner">Loading trades...</div>';
     try {
       await loadDaily();
-      const res  = await fetch(TRADES_URL);
+      const res  = await fetch(tradesUrl());
       const json = await res.json();
       if (json.error) throw new Error(json.error);
       _tradesData   = reconstructTrades(json.data);
@@ -1384,24 +1373,20 @@ document.getElementById('h-total').textContent = fmt(endVal);
     return { maxDD, ddPct, avgHoldWin, avgHoldLoss, tradesPerWeek, maxStreak };
   }
 
-  function buildRStats(trades) {
-    const withR   = trades.filter(t => t.rMultiple !== null);
+  function buildTradeStats(trades) {
+    if (!trades.length) return { avgWin: null, avgLoss: null, avgSize: null, maxSize: null, avgSizeWin: null, avgSizeLoss: null, count: 0 };
     const withSize = trades.filter(t => t.sizePct !== null);
-    if (!withR.length) return { avgR: null, avgWinR: null, avgLossR: null, expectancy: null, avgSize: null, maxSize: null, avgSizeWin: null, avgSizeLoss: null, count: 0 };
-    const winners = withR.filter(t => t.totalPnL > 0);
-    const losers  = withR.filter(t => t.totalPnL < 0);
-    const avgR    = withR.reduce((s,t) => s + t.rMultiple, 0) / withR.length;
-    const avgWinR = winners.length ? winners.reduce((s,t) => s + t.rMultiple, 0) / winners.length : 0;
-    const avgLossR = losers.length ? losers.reduce((s,t) => s + t.rMultiple, 0) / losers.length : 0;
-    const winRate  = withR.length ? (winners.length / withR.length) : 0;
-    const expectancy = (winRate * avgWinR) + ((1 - winRate) * avgLossR);
+    const winners = trades.filter(t => t.totalPnL > 0);
+    const losers  = trades.filter(t => t.totalPnL < 0);
+    const avgWin  = winners.length ? winners.reduce((s,t) => s + t.totalPnL, 0) / winners.length : 0;
+    const avgLoss = losers.length ? losers.reduce((s,t) => s + t.totalPnL, 0) / losers.length : 0;
     const avgSize  = withSize.length ? withSize.reduce((s,t) => s + t.sizePct, 0) / withSize.length : null;
     const maxSize  = withSize.length ? Math.max(...withSize.map(t => t.sizePct)) : null;
     const sizeWins = withSize.filter(t => t.totalPnL > 0);
     const sizeLoss = withSize.filter(t => t.totalPnL < 0);
     const avgSizeWin  = sizeWins.length ? sizeWins.reduce((s,t) => s + t.sizePct, 0) / sizeWins.length : null;
     const avgSizeLoss = sizeLoss.length ? sizeLoss.reduce((s,t) => s + t.sizePct, 0) / sizeLoss.length : null;
-    return { avgR, avgWinR, avgLossR, expectancy, avgSize, maxSize, avgSizeWin, avgSizeLoss, count: withR.length };
+    return { avgWin, avgLoss, avgSize, maxSize, avgSizeWin, avgSizeLoss, count: trades.length };
   }
 
   function setTradesPreset(p) {
@@ -1449,6 +1434,102 @@ document.getElementById('h-total').textContent = fmt(endVal);
       if (from && d < from) return false;
       if (to   && d > to)   return false;
       return true;
+    });
+  }
+
+  function renderRollingChart(trades) {
+    if (trades.length < 10) return '';
+    const WINDOW = 10;
+    const metrics = {
+      avgPnL: { label: 'Avg P&L', fn: function(slice) { return slice.length ? slice.reduce(function(s,t){return s+t.totalPnL},0)/slice.length : 0; }, fmt: function(v){return (v>=0?'+':'')+fmtN(v);} },
+      winRate: { label: 'Win Rate', fn: function(slice) { var wins = slice.filter(function(t){return t.totalPnL>0}).length; return slice.length ? wins/slice.length*100 : 0; }, fmt: function(v){return v.toFixed(0)+'%';} },
+      winLoss: { label: 'Win:Loss', fn: function(slice) { var w=slice.filter(function(t){return t.totalPnL>0}); var l=slice.filter(function(t){return t.totalPnL<0}); var avgW=w.length?w.reduce(function(s,t){return s+t.totalPnL},0)/w.length:0; var avgL=l.length?Math.abs(l.reduce(function(s,t){return s+t.totalPnL},0)/l.length):0; return avgL>0?avgW/avgL:0; }, fmt: function(v){return '1:'+v.toFixed(1);} },
+    };
+    var m = metrics[rollingMetric];
+    var points = [];
+    for (var i = WINDOW-1; i < trades.length; i++) {
+      var slice = trades.slice(i-WINDOW+1, i+1);
+      points.push({ idx: i, val: m.fn(slice) });
+    }
+    if (!points.length) return '';
+    var options = Object.entries(metrics).map(function(e){return '<option value="'+e[0]+'"'+(e[0]===rollingMetric?' selected':'')+'>'+e[1].label+'</option>';}).join('');
+    return '<div class="section-title">Rolling ' + WINDOW + ' Trades</div>' +
+      '<div class="chart-wrap" style="padding:1.2rem 1.6rem">' +
+        '<div style="margin-bottom:0.8rem"><select onchange="setRollingMetric(this.value)" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);font-family:var(--mono);font-size:0.78rem;padding:0.35rem 0.6rem;border-radius:3px;outline:none;cursor:pointer">' + options + '</select></div>' +
+        '<canvas id="rolling-chart" style="display:block;width:100%"></canvas>' +
+      '</div>';
+  }
+
+  function drawRollingChart(trades) {
+    var canvas = document.getElementById('rolling-chart');
+    if (!canvas || trades.length < 10) return;
+    var WINDOW = 10;
+    var metrics = {
+      avgPnL: function(slice) { return slice.length ? slice.reduce(function(s,t){return s+t.totalPnL},0)/slice.length : 0; },
+      winRate: function(slice) { var wins = slice.filter(function(t){return t.totalPnL>0}).length; return slice.length ? wins/slice.length*100 : 0; },
+      winLoss: function(slice) { var w=slice.filter(function(t){return t.totalPnL>0}); var l=slice.filter(function(t){return t.totalPnL<0}); var avgW=w.length?w.reduce(function(s,t){return s+t.totalPnL},0)/w.length:0; var avgL=l.length?Math.abs(l.reduce(function(s,t){return s+t.totalPnL},0)/l.length):0; return avgL>0?avgW/avgL:0; },
+    };
+    var fmts = {
+      avgPnL: function(v){return (v>=0?'+':'')+fmtN(v);},
+      winRate: function(v){return v.toFixed(0)+'%';},
+      winLoss: function(v){return '1:'+v.toFixed(1);},
+    };
+    var fn = metrics[rollingMetric];
+    var fmt2 = fmts[rollingMetric];
+    var points = [];
+    for (var i = WINDOW-1; i < trades.length; i++) {
+      points.push(fn(trades.slice(i-WINDOW+1, i+1)));
+    }
+    var ctx = canvas.getContext('2d');
+    var dpr = window.devicePixelRatio||1;
+    var W = canvas.offsetWidth, H = 240;
+    canvas.width = W*dpr; canvas.height = H*dpr;
+    canvas.style.height = H+'px';
+    ctx.scale(dpr,dpr);
+    ctx.clearRect(0,0,W,H);
+
+    var pad = {top:16,right:20,bottom:28,left:55};
+    var cW = W-pad.left-pad.right, cH = H-pad.top-pad.bottom;
+    var minV = Math.min(...points), maxV = Math.max(...points);
+    var range = maxV-minV || 1;
+    minV -= range*0.1; maxV += range*0.1; range = maxV-minV;
+    var xP = function(i){return points.length>1 ? pad.left+(i/(points.length-1))*cW : pad.left+cW/2;};
+    var yP = function(v){return pad.top+cH-((v-minV)/range)*cH;};
+
+    // Grid
+    var rawStep=range/4, mag=Math.pow(10,Math.floor(Math.log10(rawStep||1)));
+    var gStep=Math.ceil(rawStep/mag)*mag || 1;
+    var gStart=Math.ceil(minV/gStep)*gStep;
+    ctx.strokeStyle='#252A3C'; ctx.lineWidth=1;
+    for (var v=gStart; v<=maxV; v+=gStep) {
+      var y=yP(v);
+      ctx.beginPath(); ctx.moveTo(pad.left,y); ctx.lineTo(pad.left+cW,y); ctx.stroke();
+      ctx.font='11px DM Mono,monospace'; ctx.fillStyle='#CDD2E0'; ctx.textAlign='right';
+      ctx.fillText(fmt2(v), pad.left-6, y+4);
+    }
+
+    // Zero line for avgPnL
+    if (rollingMetric === 'avgPnL' && minV < 0 && maxV > 0) {
+      ctx.strokeStyle='#6B7390'; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(pad.left,yP(0)); ctx.lineTo(pad.left+cW,yP(0)); ctx.stroke();
+    }
+
+    // Line
+    ctx.beginPath(); ctx.strokeStyle='#FF4E1A'; ctx.lineWidth=2; ctx.lineJoin='round';
+    points.forEach(function(v,i){i===0?ctx.moveTo(xP(i),yP(v)):ctx.lineTo(xP(i),yP(v));});
+    ctx.stroke();
+
+    // Dots
+    ctx.fillStyle='#FF4E1A';
+    points.forEach(function(v,i){ctx.beginPath();ctx.arc(xP(i),yP(v),2.5,0,Math.PI*2);ctx.fill();});
+
+    // X labels
+    var lStep = Math.max(1,Math.floor(points.length/5));
+    ctx.font='11px DM Mono,monospace'; ctx.fillStyle='#CDD2E0'; ctx.textAlign='center';
+    points.forEach(function(v,i){
+      if (i%lStep===0||i===points.length-1) {
+        ctx.fillText('#'+(i+WINDOW), xP(i), H-8);
+      }
     });
   }
 
@@ -1555,10 +1636,9 @@ document.getElementById('h-total').textContent = fmt(endVal);
       const count = bTrades.length;
       const wins = bTrades.filter(t => t.totalPnL > 0).length;
       const winRate = count ? (wins / count * 100) : 0;
-      const withR = bTrades.filter(t => t.rMultiple !== null);
-      const avgR = withR.length ? withR.reduce((s,t) => s + t.rMultiple, 0) / withR.length : null;
+      const avgPnL = count ? bTrades.reduce((s,t) => s + t.totalPnL, 0) / count : 0;
       const totalPnL = bTrades.reduce((s,t) => s + t.totalPnL, 0);
-      return { bucket: b, count, winRate, avgR, totalPnL };
+      return { bucket: b, count, winRate, avgPnL, totalPnL };
     });
 
     const options = Object.entries(metrics).map(([k,v]) =>
@@ -1574,13 +1654,13 @@ document.getElementById('h-total').textContent = fmt(endVal);
     <div class="trades-table-wrap">
       <table class="trades-table">
         <thead><tr>
-          <th>${metric.label}</th><th>Trades</th><th>Win Rate</th><th>Avg R</th><th>Total P&L</th>
+          <th>${metric.label}</th><th>Trades</th><th>Win Rate</th><th>Avg P&L</th><th>Total P&L</th>
         </tr></thead>
         <tbody>${rows.map(r => `<tr>
           <td style="color:var(--text-1);font-weight:500">${r.bucket}</td>
           <td>${r.count}</td>
           <td class="${r.winRate>=50?'pos':'neg'}">${r.winRate.toFixed(0)}%</td>
-          <td class="${r.avgR!==null?cls(r.avgR):''}">${r.avgR!==null ? (r.avgR>=0?'+':'') + r.avgR.toFixed(1) + 'R' : '—'}</td>
+          <td class="${cls(r.avgPnL)}">${fmtS(r.avgPnL)}</td>
           <td class="${cls(r.totalPnL)}">${fmtS(r.totalPnL)}</td>
         </tr>`).join('')}</tbody>
       </table>
@@ -1616,23 +1696,22 @@ document.getElementById('h-total').textContent = fmt(endVal);
       const count = sTrades.length;
       const wins = sTrades.filter(t => t.totalPnL > 0).length;
       const winRate = count ? (wins / count * 100) : 0;
-      const avgR = sTrades.filter(t => t.rMultiple !== null);
-      const avg = avgR.length ? avgR.reduce((s,t) => s + t.rMultiple, 0) / avgR.length : null;
+      const avgPnL = count ? sTrades.reduce((s,t) => s + t.totalPnL, 0) / count : null;
       const totalPnL = sTrades.reduce((s,t) => s + t.totalPnL, 0);
       const label = slotLabel(slot) + ' – ' + slotLabel(slot + 1);
-      return { slot, label, count, winRate, avg, totalPnL, empty: count === 0 };
+      return { slot, label, count, winRate, avgPnL, totalPnL, empty: count === 0 };
     });
     return `<div class="section-title">Performance by Time of Day <span style="font-size:0.65rem;color:var(--text-3);letter-spacing:0.06em;text-transform:none">(Day Trades — entry time, PT)</span></div>
     <div class="trades-table-wrap">
       <table class="trades-table">
         <thead><tr>
-          <th>Time</th><th>Trades</th><th>Win Rate</th><th>Avg R</th><th>Total P&L</th>
+          <th>Time</th><th>Trades</th><th>Win Rate</th><th>Avg P&L</th><th>Total P&L</th>
         </tr></thead>
         <tbody>${rows.map(r => `<tr>
           <td style="color:var(--text-1);font-weight:500">${r.label}</td>
           <td>${r.count}</td>
           <td class="${r.winRate>=50?'pos':'neg'}">${r.winRate.toFixed(0)}%</td>
-          <td class="${r.avg!==null?cls(r.avg):''}">${r.avg!==null ? (r.avg>=0?'+':'') + r.avg.toFixed(1) + 'R' : '—'}</td>
+          <td class="${r.avgPnL!==null?cls(r.avgPnL):''}">${r.avgPnL!==null ? fmtS(r.avgPnL) : '—'}</td>
           <td class="${cls(r.totalPnL)}">${fmtS(r.totalPnL)}</td>
         </tr>`).join('')}</tbody>
       </table>
@@ -1650,12 +1729,14 @@ document.getElementById('h-total').textContent = fmt(endVal);
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, W, H);
 
-    const pad = { top: 20, right: 20, bottom: 36, left: 55 };
+    const pad = { top: 20, right: 20, bottom: 36, left: 65 };
     const cW = W - pad.left - pad.right, cH = H - pad.top - pad.bottom;
 
-    const vals = rows.map(r => r.avg || 0);
-    const maxAbs = Math.max(0.5, ...vals.map(Math.abs));
-    const maxV = Math.ceil(maxAbs * 2) / 2;
+    const vals = rows.map(r => r.avgPnL || 0);
+    const maxAbs = Math.max(10, ...vals.map(Math.abs));
+    const rawStep = maxAbs / 2;
+    const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    const maxV = Math.ceil(maxAbs / mag) * mag;
 
     const zeroY = pad.top + cH / 2;
     const yP = v => zeroY - (v / maxV) * (cH / 2);
@@ -1680,14 +1761,14 @@ document.getElementById('h-total').textContent = fmt(endVal);
     ctx.font = '11px DM Mono,monospace'; ctx.fillStyle = '#CDD2E0'; ctx.textAlign = 'right';
     gridVals.forEach(v => {
       if (v === 0) return;
-      ctx.fillText((v >= 0 ? '+' : '') + v.toFixed(1) + 'R', pad.left - 8, yP(v) + 4);
+      ctx.fillText(fmtN(v), pad.left - 8, yP(v) + 4);
     });
-    ctx.fillText('0', pad.left - 8, zeroY + 4);
+    ctx.fillText('$0', pad.left - 8, zeroY + 4);
 
     // Bars
     rows.forEach((r, i) => {
       const x = pad.left + step * i + (step - barW) / 2;
-      const val = r.avg || 0;
+      const val = r.avgPnL || 0;
       const color = val >= 0 ? '#22C55E' : '#EF4444';
       const y = yP(val);
       ctx.fillStyle = color;
@@ -1698,10 +1779,10 @@ document.getElementById('h-total').textContent = fmt(endVal);
       }
 
       // Data label on bar
-      if (r.avg !== null) {
+      if (r.avgPnL !== null) {
         const labelY = val >= 0 ? y - 6 : y + 12;
         ctx.font = '10px DM Mono,monospace'; ctx.fillStyle = color; ctx.textAlign = 'center';
-        ctx.fillText((val >= 0 ? '+' : '') + val.toFixed(1) + 'R', x + barW / 2, labelY);
+        ctx.fillText(fmtS(val), x + barW / 2, labelY);
       }
 
       // X label
@@ -1712,7 +1793,6 @@ document.getElementById('h-total').textContent = fmt(endVal);
 
   function renderTradeLog(trades) {
     if (!trades.length) return '';
-    function fmtR(r) { return r !== null ? (r >= 0 ? '+' : '') + r.toFixed(1) + 'R' : '—'; }
     function fmtSizePct(p) { return p !== null ? Math.round(p * 100) + '%' : '—'; }
     function fmtDt(s) {
       if (!s) return '—';
@@ -1720,7 +1800,6 @@ document.getElementById('h-total').textContent = fmt(endVal);
       if (isNaN(d)) return s.slice(0,10);
       return (d.getMonth()+1) + '/' + d.getDate() + '/' + d.getFullYear();
     }
-    const hasR = trades.some(t => t.rMultiple !== null);
 
     const sortKeys = {
       result: t => t.totalPnL > 0 ? 1 : t.totalPnL < 0 ? -1 : 0,
@@ -1734,7 +1813,6 @@ document.getElementById('h-total').textContent = fmt(endVal);
       pnl: t => t.totalPnL,
       pnlPct: t => t.pnlPct,
       sizePct: t => t.sizePct || 0,
-      r: t => t.rMultiple || 0,
       openTime: t => t.firstOpen,
       closeTime: t => t.lastClose,
       days: t => t.daysHeld,
@@ -1759,7 +1837,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
         '<thead><tr>' +
           sortTh('Opened', 'openTime') + sortTh('W/L', 'result') + sortTh('Style', 'style') +
           sortTh('Underlying', 'underlying') + sortTh('Type', 'type') + sortTh('Strike', 'strike') + sortTh('Expiry', 'expiry') +
-          sortTh('P&L', 'pnl') + (hasR ? sortTh('R', 'r') + sortTh('Size %', 'sizePct') : '') +
+          sortTh('P&L', 'pnl') + sortTh('P&L %', 'pnlPct') + sortTh('Size %', 'sizePct') +
           sortTh('Cost Basis', 'cost') + sortTh('Qty', 'qty') +
           sortTh('Closed', 'closeTime') + sortTh('Time Held', 'days') +
         '</tr></thead>' +
@@ -1775,7 +1853,8 @@ document.getElementById('h-total').textContent = fmt(endVal);
           '<td>$' + t.parsed.strike.toFixed(0) + '</td>' +
           '<td>' + t.parsed.expiryDisplay + '</td>' +
           '<td class="' + cls(t.totalPnL) + '">' + fmtS(t.totalPnL) + '</td>' +
-          (hasR ? '<td class="' + (t.rMultiple!==null?cls(t.rMultiple):'') + '">' + fmtR(t.rMultiple) + '</td><td>' + fmtSizePct(t.sizePct) + '</td>' : '') +
+          '<td class="' + cls(t.pnlPct) + '">' + (t.pnlPct >= 0 ? '+' : '') + t.pnlPct.toFixed(0) + '%</td>' +
+          '<td>' + fmtSizePct(t.sizePct) + '</td>' +
           '<td>' + fmt(t.totalCost) + '</td>' +
           '<td>' + t.totalQty + '</td>' +
           '<td>' + fmtDt(t.closeTime) + '</td>' +
@@ -1810,14 +1889,20 @@ document.getElementById('h-total').textContent = fmt(endVal);
     };
   }
 
-  let tradesCumMode = 'pnl'; // 'pnl' | 'r'
   let tradesPnlUnit = '$'; // '$' | '%'
-  let bucketMetric = 'tradesPerDay'; // 'tradesPerDay' | 'sizePct' | 'tradeNumInDay'
+  let rollingMetric = 'avgPnL'; // 'avgPnL' | 'winRate' | 'winLoss'
+  let mcTrades = 50; // Monte Carlo projection trades
 
-  function setTradesCumMode(m) {
-    tradesCumMode = m;
+  function setMcTrades(n) {
+    mcTrades = parseInt(n) || 50;
     renderTrades();
   }
+
+  function setRollingMetric(m) {
+    rollingMetric = m;
+    renderTrades();
+  }
+  let bucketMetric = 'tradesPerDay'; // 'tradesPerDay' | 'sizePct' | 'tradeNumInDay'
 
   function setTradesPnlUnit(u) {
     tradesPnlUnit = u;
@@ -1892,25 +1977,19 @@ document.getElementById('h-total').textContent = fmt(endVal);
     const winners  = filteredTrades.filter(t => t.totalPnL > 0);
     const losers   = filteredTrades.filter(t => t.totalPnL < 0);
     const winRate  = filteredTrades.length ? (winners.length/filteredTrades.length*100) : 0;
-    const avgWinR  = winners.filter(t => t.rMultiple !== null);
-    const avgLossR = losers.filter(t => t.rMultiple !== null);
-    const avgWR    = avgWinR.length ? avgWinR.reduce((s,t) => s + t.rMultiple, 0) / avgWinR.length : 0;
-    const avgLR    = avgLossR.length ? Math.abs(avgLossR.reduce((s,t) => s + t.rMultiple, 0) / avgLossR.length) : 0;
-    const rrNum    = avgLR > 0 ? avgWR / avgLR : null;
+    const avgWin$  = winners.length ? winners.reduce((s,t) => s + t.totalPnL, 0) / winners.length : 0;
+    const avgLoss$ = losers.length ? Math.abs(losers.reduce((s,t) => s + t.totalPnL, 0) / losers.length) : 0;
+    const rrNum    = avgLoss$ > 0 ? avgWin$ / avgLoss$ : null;
     const rrRatio  = rrNum !== null ? '1:' + rrNum.toFixed(1) : '—';
     const breakeven = rrNum !== null ? (1 / (1 + rrNum)) * 100 : null;
+    const expectancy = filteredTrades.length ? (winRate/100 * avgWin$) + ((1 - winRate/100) * -avgLoss$) : null;
     const startBalance = filteredTrades.length ? (function() { var d = lookupDaily(filteredTrades[0].openTime); return d ? d.balance : null; })() : null;
     const acctReturn = startBalance ? (totalPnL / startBalance) * 100 : null;
 
-    // R stats (contract-level)
     const RECENT_N = 10;
-    const rStats = buildRStats(filteredTrades);
+    const tStats = buildTradeStats(filteredTrades);
     const recentTrades = filteredTrades.slice(-RECENT_N);
-    const rStatsRecent = buildRStats(recentTrades);
-    const dayTrades   = filteredTrades.filter(t => t.daysHeld === 0);
-    const swingTrades = filteredTrades.filter(t => t.daysHeld > 0);
-    const rStatsDT    = buildRStats(dayTrades);
-    const rStatsSW    = buildRStats(swingTrades);
+    const tStatsRecent = buildTradeStats(recentTrades);
     const discStats   = buildDisciplineStats(filteredTrades);
     const discStatsRecent = buildDisciplineStats(recentTrades);
 
@@ -1920,20 +1999,18 @@ document.getElementById('h-total').textContent = fmt(endVal);
     filteredTrades.forEach(t => {
       const d = t.lastClose;
       const key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-      if (!byDay[key]) byDay[key] = { date: d, trades: [], dayPnL: 0, dayR: 0, wins: 0 };
+      if (!byDay[key]) byDay[key] = { date: d, trades: [], dayPnL: 0, wins: 0 };
       byDay[key].dayPnL += t.totalPnL;
-      byDay[key].dayR += (t.rMultiple || 0);
       byDay[key].trades.push(t);
       if (t.totalPnL > 0) byDay[key].wins++;
     });
     const cumData = Object.keys(byDay).sort().map(key => {
       const day = byDay[key];
       let dayVal;
-      if (tradesCumMode === 'r') dayVal = day.dayR;
-      else if (tradesPnlUnit === '%' && startBalance) dayVal = (day.dayPnL / startBalance) * 100;
+      if (tradesPnlUnit === '%' && startBalance) dayVal = (day.dayPnL / startBalance) * 100;
       else dayVal = day.dayPnL;
       cumVal += dayVal;
-      return { date: day.date, cum: cumVal, count: day.trades.length, dayPnL: day.dayPnL, dayR: day.dayR, wins: day.wins };
+      return { date: day.date, cum: cumVal, count: day.trades.length, dayPnL: day.dayPnL, wins: day.wins };
     });
 
     function fmtDate2(s) {
@@ -1943,7 +2020,6 @@ document.getElementById('h-total').textContent = fmt(endVal);
       return (d.getMonth()+1) + '/' + d.getDate();
     }
     function fmtDt(s) { return s ? s.slice(0,10) : '—'; }
-    function fmtR(r) { return r !== null ? (r >= 0 ? '+' : '') + r.toFixed(1) + 'R' : '—'; }
     function fmtSizePct(p) { return p !== null ? Math.round(p * 100) + '%' : '—'; }
 
     function warnCls(recent, allTime, worse) {
@@ -1972,29 +2048,27 @@ document.getElementById('h-total').textContent = fmt(endVal);
       </tr>`;
     }
 
-    const rStatsHtml = filteredTrades.length > 0 ? `
-      <div class="section-title">Risk & Sizing <span style="font-size:0.65rem;color:var(--text-3);letter-spacing:0.06em;text-transform:none">(All vs Last ${RECENT_N})</span></div>
+    const sizingHtml = filteredTrades.length > 0 ? `
+      <div class="section-title">Sizing <span style="font-size:0.65rem;color:var(--text-3);letter-spacing:0.06em;text-transform:none">(All vs Last ${RECENT_N})</span></div>
       <div class="trades-table-wrap">
         <table class="trades-table">
           <thead><tr>
             <th>Metric</th><th>All (${filteredTrades.length})</th><th>Last ${Math.min(RECENT_N, filteredTrades.length)}</th><th style="text-align:center">Δ</th>
           </tr></thead>
           <tbody>
-            ${compRow('Avg Size %', rStats.avgSize, rStatsRecent.avgSize, fmtSizePct, function(r,a){return r>a*1.3})}
-            ${compRow('Max Size %', rStats.maxSize, rStatsRecent.maxSize, fmtSizePct, function(r,a){return r>a*1.3})}
-            ${compRow('Avg Size (Win)', rStats.avgSizeWin, rStatsRecent.avgSizeWin, fmtSizePct, function(r,a){return r<a})}
-            ${compRow('Avg Size (Loss)', rStats.avgSizeLoss, rStatsRecent.avgSizeLoss, fmtSizePct, function(r,a){return r>a*1.3})}
-            ${compRow('Avg Win R', rStats.avgWinR, rStatsRecent.avgWinR, fmtR, function(r,a){return r<a})}
-            ${compRow('Avg Loss R', rStats.avgLossR, rStatsRecent.avgLossR, fmtR, function(r,a){return r<a})}
+            ${compRow('Avg Size %', tStats.avgSize, tStatsRecent.avgSize, fmtSizePct, function(r,a){return r>a*1.3})}
+            ${compRow('Max Size %', tStats.maxSize, tStatsRecent.maxSize, fmtSizePct, function(r,a){return r>a*1.3})}
+            ${compRow('Avg Size (Win)', tStats.avgSizeWin, tStatsRecent.avgSizeWin, fmtSizePct, function(r,a){return r<a})}
+            ${compRow('Avg Size (Loss)', tStats.avgSizeLoss, tStatsRecent.avgSizeLoss, fmtSizePct, function(r,a){return r>a*1.3})}
           </tbody>
         </table>
       </div>` : `
-      <div class="section-title">Risk & Sizing</div>
+      <div class="section-title">Sizing</div>
       <div class="trades-summary">
         <div class="tstat"><span class="tstat-label">Avg Size %</span><span class="tstat-val">—</span></div>
         <div class="tstat"><span class="tstat-label">Max Size %</span><span class="tstat-val">—</span></div>
-        <div class="tstat"><span class="tstat-label">Avg Win R</span><span class="tstat-val">—</span></div>
-        <div class="tstat"><span class="tstat-label">Avg Loss R</span><span class="tstat-val">—</span></div>
+        <div class="tstat"><span class="tstat-label">Avg Size (Win)</span><span class="tstat-val">—</span></div>
+        <div class="tstat"><span class="tstat-label">Avg Size (Loss)</span><span class="tstat-val">—</span></div>
       </div>`;
 
     function fmtHold(ms) {
@@ -2018,10 +2092,10 @@ document.getElementById('h-total').textContent = fmt(endVal);
           </tr></thead>
           <tbody>
             ${compRow('Max Drawdown', discStats, discStatsRecent, fmtDD, null)}
+            ${compRow('Max Loss Streak', discStats.maxStreak, discStatsRecent.maxStreak, function(v){return v!=null?v.toString():'—'}, function(r,a){return r>a})}
             ${compRow('Avg Hold (Win)', discStats.avgHoldWin, discStatsRecent.avgHoldWin, fmtHold, null)}
             ${compRow('Avg Hold (Loss)', discStats.avgHoldLoss, discStatsRecent.avgHoldLoss, fmtHold, function(r,a){return r>a*1.3})}
             ${compRow('Trade Freq', discStats.tradesPerWeek, discStatsRecent.tradesPerWeek, fmtFreq, function(r,a){return r>a*1.5})}
-            ${compRow('Max Loss Streak', discStats.maxStreak, discStatsRecent.maxStreak, function(v){return v!=null?v.toString():'—'}, function(r,a){return r>a})}
           </tbody>
         </table>
       </div>` : `
@@ -2036,13 +2110,11 @@ document.getElementById('h-total').textContent = fmt(endVal);
 
     // Daily scorecard — today's stats
     const today = new Date();
-    const todayKey = today.getFullYear() + '-' + String(today.getMonth()+1).padStart(2,'0') + '-' + String(today.getDate()).padStart(2,'0');
     const todayTrades = filteredTrades.filter(t => {
       const d = t.lastClose;
       return d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
     });
     const todayPnL = todayTrades.reduce((s,t) => s + t.totalPnL, 0);
-    const todayR = todayTrades.filter(t => t.rMultiple !== null).reduce((s,t) => s + t.rMultiple, 0);
     const todayWins = todayTrades.filter(t => t.totalPnL > 0).length;
     const todayWR = todayTrades.length ? (todayWins / todayTrades.length * 100) : 0;
     const todayBalance = _dailyData && _dailyData.length ? _dailyData[_dailyData.length-1].balance : null;
@@ -2054,7 +2126,6 @@ document.getElementById('h-total').textContent = fmt(endVal);
         <div class="tstat"><span class="tstat-label">P&L</span><span class="tstat-val ${cls(todayPnL)}">${fmtS(todayPnL)}${todayReturnPct !== null ? ' <span style="opacity:0.65;font-size:0.82rem">(' + (todayReturnPct>=0?'+':'') + todayReturnPct.toFixed(1) + '%)</span>' : ''}</span></div>
         <div class="tstat"><span class="tstat-label">Trades</span><span class="tstat-val">${todayTrades.length}</span></div>
         <div class="tstat"><span class="tstat-label">Win Rate</span><span class="tstat-val ${todayTrades.length ? (todayWR>=50?'pos':'neg') : ''}">${todayTrades.length ? todayWR.toFixed(0) + '%' : '—'}</span></div>
-        <div class="tstat"><span class="tstat-label">Total R</span><span class="tstat-val ${cls(todayR)}">${todayTrades.length ? (todayR>=0?'+':'') + todayR.toFixed(1) + 'R' : '—'}</span></div>
       </div>`;
 
     wrap.innerHTML = `
@@ -2063,24 +2134,26 @@ document.getElementById('h-total').textContent = fmt(endVal);
       <div class="section-title">Edge</div>
       <div class="trades-summary">
         <div class="tstat"><span class="tstat-label">Total P&L</span><span class="tstat-val ${cls(totalPnL)}">${fmtS(totalPnL)}${acctReturn !== null ? ' <span style="opacity:0.65;font-size:0.82rem">(' + (acctReturn>=0?'+':'') + acctReturn.toFixed(1) + '%)</span>' : ''}</span></div>
+        <div class="tstat"><span class="tstat-label">Expectancy</span><span class="tstat-val ${expectancy !== null ? cls(expectancy) : ''}">${expectancy !== null ? fmtS(expectancy) : '—'}<span style="opacity:0.65;font-size:0.75rem"> /trade</span></span></div>
         <div class="tstat"><span class="tstat-label">Win Rate</span><span class="tstat-val ${winRate>=50?'pos':'neg'}">${winRate.toFixed(1)}%</span></div>
-        <div class="tstat"><span class="tstat-label">Trades</span><span class="tstat-val">${filteredTrades.length}</span></div>
-        <div class="tstat"><span class="tstat-label">R:R</span><span class="tstat-val">${rrRatio}</span></div>
+        <div class="tstat"><span class="tstat-label">Avg Win</span><span class="tstat-val pos">${avgWin$ ? fmtS(avgWin$) : '—'}</span></div>
+        <div class="tstat"><span class="tstat-label">Avg Loss</span><span class="tstat-val neg">${avgLoss$ ? fmtS(-avgLoss$) : '—'}</span></div>
+        <div class="tstat"><span class="tstat-label">Win:Loss</span><span class="tstat-val">${rrRatio}</span></div>
         <div class="tstat"><span class="tstat-label">Breakeven WR</span><span class="tstat-val">${breakeven !== null ? breakeven.toFixed(1) + '%' : '—'}</span></div>
+        <div class="tstat"><span class="tstat-label">Trades</span><span class="tstat-val">${filteredTrades.length}</span></div>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;align-items:start">
-        <div>${rStatsHtml}</div>
+        <div>${sizingHtml}</div>
         <div>${discHtml}</div>
       </div>
 
       <div class="chart-wrap" style="padding:1.2rem 1.6rem">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.8rem">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.8rem;flex-wrap:wrap;gap:0.5rem">
           <div class="section-title" style="margin:0">Equity Curve</div>
-          <div style="display:flex;gap:0.35rem">
-            <button class="pill${tradesCumMode==='pnl'?' active':''}" onclick="setTradesCumMode('pnl')">P&L</button>
-            ${tradesCumMode==='pnl' ? `<button class="pill${tradesPnlUnit==='$'?' active':''}" onclick="setTradesPnlUnit('$')" style="font-size:0.65rem;padding:0.2rem 0.5rem">$</button><button class="pill${tradesPnlUnit==='%'?' active':''}" onclick="setTradesPnlUnit('%')" style="font-size:0.65rem;padding:0.2rem 0.5rem">%</button>` : ''}
-            <button class="pill${tradesCumMode==='r'?' active':''}" onclick="setTradesCumMode('r')">R</button>
+          <div style="display:flex;gap:0.35rem;align-items:center">
+            <button class="pill${tradesPnlUnit==='$'?' active':''}" onclick="setTradesPnlUnit('$')" style="font-size:0.72rem;padding:0.25rem 0.6rem">$</button>
+            <button class="pill${tradesPnlUnit==='%'?' active':''}" onclick="setTradesPnlUnit('%')" style="font-size:0.72rem;padding:0.25rem 0.6rem">%</button>
           </div>
         </div>
         <div style="position:relative">
@@ -2090,6 +2163,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
       </div>
 
 
+      ${renderRollingChart(filteredTrades)}
       ${renderBucketAnalysis(filteredTrades)}
       ${renderTimeOfDay(filteredTrades)}
 
@@ -2112,8 +2186,9 @@ document.getElementById('h-total').textContent = fmt(endVal);
 
       ${renderTradeLog(filteredTrades)}`;
 
-    // Draw equity curve chart
+    // Draw charts
     setTimeout(() => {
+      drawRollingChart(filteredTrades);
       const canvas = document.getElementById('trades-chart');
       if (!canvas || cumData.length < 1) return;
       const ctx = canvas.getContext('2d');
@@ -2126,10 +2201,64 @@ document.getElementById('h-total').textContent = fmt(endVal);
 
       const pad = {top:12,right:20,bottom:28,left:80};
       const cW = W-pad.left-pad.right, cH = H-pad.top-pad.bottom;
+
+      // Monte Carlo simulation from trade 0 (same length as actual data, per-day)
+      // Use ALL-TIME daily values for MC/EV so filtered views compare against long-term baseline
+      const MC_PATHS = 200;
+      const mcPool = [];
+      const allTradesForMC = aggregateByContract(_tradesData);
+      const allByDay = {};
+      allTradesForMC.forEach(t => {
+        const d = t.lastClose;
+        const key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+        if (!allByDay[key]) allByDay[key] = { dayPnL: 0 };
+        allByDay[key].dayPnL += t.totalPnL;
+      });
+      Object.keys(allByDay).sort().forEach(key => {
+        const day = allByDay[key];
+        if (tradesPnlUnit === '%' && startBalance) mcPool.push(day.dayPnL / startBalance * 100);
+        else mcPool.push(day.dayPnL);
+      });
+      const mcN = cumData.length;
+      const mcPaths = [];
+      if (mcPool.length >= 2 && mcN > 1) {
+        for (var p = 0; p < MC_PATHS; p++) {
+          var path = [0];
+          var cum = 0;
+          for (var j = 0; j < mcN; j++) {
+            cum += mcPool[Math.floor(Math.random() * mcPool.length)];
+            path.push(cum);
+          }
+          mcPaths.push(path);
+        }
+      }
+
+      // Compute percentile bands
+      var mcBands = [];
+      if (mcPaths.length) {
+        for (var j = 0; j <= mcN; j++) {
+          var vals_j = mcPaths.map(function(p){return p[j]}).sort(function(a,b){return a-b});
+          mcBands.push({
+            p10: vals_j[Math.floor(vals_j.length*0.1)],
+            p25: vals_j[Math.floor(vals_j.length*0.25)],
+            p50: vals_j[Math.floor(vals_j.length*0.5)],
+            p75: vals_j[Math.floor(vals_j.length*0.75)],
+            p90: vals_j[Math.floor(vals_j.length*0.9)],
+          });
+        }
+      }
+
+      // Expected value line (avg per trade × N)
+      const avgPerTrade = mcPool.length ? mcPool.reduce(function(s,v){return s+v},0) / mcPool.length : 0;
+
+      const totalPoints = cumData.length;
       const vals = cumData.map(d => d.cum);
-      const minV = Math.min(0, ...vals), maxV = Math.max(0, ...vals);
+      const evMax = avgPerTrade * (cumData.length - 1);
+      const mcAllVals = mcBands.length ? mcBands.flatMap(b => [b.p10, b.p90]) : [evMax];
+      const allVals = [...vals, ...mcAllVals];
+      const minV = Math.min(0, ...allVals), maxV = Math.max(0, ...allVals);
       const range = maxV-minV || 1;
-      const xP = i => cumData.length > 1 ? pad.left + (i/(cumData.length-1))*cW : pad.left + cW/2;
+      const xP = i => totalPoints > 1 ? pad.left + (i/(totalPoints-1))*cW : pad.left + cW/2;
       const yP = v => pad.top  + cH - ((v-minV)/range)*cH;
 
       // Zero line
@@ -2148,7 +2277,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
         const y=yP(v);
         ctx.beginPath(); ctx.moveTo(pad.left,y); ctx.lineTo(pad.left+cW,y); ctx.stroke();
         ctx.font='12px DM Mono,monospace'; ctx.fillStyle='#CDD2E0'; ctx.textAlign='right';
-        const yLabel = tradesCumMode === 'r' ? v.toFixed(1) + 'R' : tradesPnlUnit === '%' ? v.toFixed(1) + '%' : fmtN(v);
+        const yLabel = tradesPnlUnit === '%' ? v.toFixed(1) + '%' : fmtN(v);
         ctx.fillText(yLabel, pad.left-6, y+4);
       }
 
@@ -2188,6 +2317,29 @@ document.getElementById('h-total').textContent = fmt(endVal);
       }
       labeledX.forEach(l => ctx.fillText(l.label, xP(l.i), H-6));
 
+      // Monte Carlo bands (from trade 0)
+      if (mcBands.length) {
+        // P10-P90 band
+        ctx.beginPath();
+        for (var j = 0; j <= mcN; j++) ctx.lineTo(xP(j), yP(mcBands[j].p90));
+        for (var j = mcN; j >= 0; j--) ctx.lineTo(xP(j), yP(mcBands[j].p10));
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(255,78,26,0.06)';
+        ctx.fill();
+        // P25-P75 band
+        ctx.beginPath();
+        for (var j = 0; j <= mcN; j++) ctx.lineTo(xP(j), yP(mcBands[j].p75));
+        for (var j = mcN; j >= 0; j--) ctx.lineTo(xP(j), yP(mcBands[j].p25));
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(255,78,26,0.12)';
+        ctx.fill();
+        // Expected value line
+        ctx.beginPath(); ctx.strokeStyle = '#FF4E1A'; ctx.lineWidth = 1.5; ctx.setLineDash([4,4]);
+        for (var j = 0; j <= mcN; j++) { var ev = avgPerTrade * j; j===0 ? ctx.moveTo(xP(j), yP(ev)) : ctx.lineTo(xP(j), yP(ev)); }
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
       // Line segments colored by above/below zero
       ctx.lineWidth=2; ctx.lineJoin='round'; ctx.lineCap='round';
       for (let i = 1; i < cumData.length; i++) {
@@ -2222,7 +2374,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
         var d = cumData[nearest];
         var tooltip = document.getElementById('eq-tooltip');
         if (!tooltip || !d) return;
-        var dayLabel = tradesCumMode === 'r' ? (d.dayR>=0?'+':'') + d.dayR.toFixed(1) + 'R' : fmtS(d.dayPnL);
+        var dayLabel = fmtS(d.dayPnL);
         var wr = d.count ? Math.round(d.wins / d.count * 100) : 0;
         tooltip.innerHTML = '<div style="color:var(--text-3);margin-bottom:0.3rem">' + fmtDate2(d.date) + '</div>' +
           '<div style="color:var(--text-3)">Trades: <span style="color:var(--text-2)">' + d.count + '</span> (' + wr + '% WR)</div>' +

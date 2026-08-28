@@ -24,11 +24,9 @@ Single HTML file dashboard for tracking multi-account investments and day tradin
 - Status must be "Filled"
 
 **WB Daily** — daily opening balance for the day trading account
-- Columns (case-sensitive): `Date`, `Starting Balance`, `Risk %`
+- Columns (case-sensitive): `Date`, `Starting Balance`
 - Date format in sheet: `8/5/2026` (M/D/YYYY) — code normalizes to YYYY-MM-DD
-- Risk % is a Google Sheets percentage (stored as decimal, e.g. 1 = 100%)
-- Risk % forward-fills — only add a new value when strategy changes
-- Default risk is 100% (sizing for zero / full premium loss)
+- Used for Size % calculation and account return %
 
 ## Two Tabs
 
@@ -39,20 +37,19 @@ Single HTML file dashboard for tracking multi-account investments and day tradin
 ### Trades Tab
 Core sections in order:
 1. **Filter bar** — date presets, custom range, Day/Swing/All, Calls/Puts/All, ticker pills
-2. **Today (scorecard)** — today's P&L ($, %), trades, WR, total R
-3. **Edge** — Total P&L (with account return %), Win Rate, Trades, R:R, Breakeven WR
-4. **Risk & Sizing + Discipline** — side by side tables, All vs Last 10 with delta arrows
-5. **Equity Curve** — P&L ($/%)/R toggle, daily aggregation, adaptive X-axis, tooltip
+2. **Today (scorecard)** — today's P&L ($, %), trades, WR
+3. **Edge** — Total P&L (with account return %), Win Rate, Avg Win, Avg Loss, Win:Loss ratio, Breakeven WR, Trades
+4. **Sizing & P&L + Discipline** — side by side tables, All vs Last 10 with delta arrows
+5. **Equity Curve** — P&L ($/%) toggle, daily aggregation, adaptive X-axis, tooltip, Monte Carlo bands
 6. **Performance by Factor** — dropdown (Trades per Day, Position Size, Trade # in Day)
 7. **Performance by Time of Day** — 30-min buckets, ET→PT conversion, day trades only
 8. **Open Positions**
-9. **Trade Log** — sortable, columns: Opened, W/L, Style, Underlying, Type, Strike, Expiry, P&L, R, Size%, Cost Basis, Qty, Closed, Days Held
+9. **Trade Log** — sortable, columns: Opened, W/L, Style, Underlying, Type, Strike, Expiry, P&L, P&L %, Size%, Cost Basis, Qty, Closed, Time Held
 
 ## Key Calculations
 
-- **R multiple** = P&L / (cost basis × risk %). At 100% risk, R = P&L / cost basis
 - **Size %** = cost basis / daily opening balance
-- **R:R** = avg winning R / |avg losing R|, displayed as risk:reward (1:X)
+- **Win:Loss** = avg winning P&L / |avg losing P&L|, displayed as 1:X
 - **Breakeven WR** = 1 / (1 + reward/risk) × 100
 - **Account Return %** = total P&L / starting balance for the period
 - Trades are aggregated at contract level (same option symbol = one trade regardless of adds/trims)
