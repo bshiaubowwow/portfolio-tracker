@@ -235,6 +235,19 @@
       letter-spacing: 0.06em;
     }
 
+    /* ── CALENDAR ── */
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--border); }
+    .cal-hdr { background: var(--surface-2); font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); padding: 0.5rem 0; text-align: center; }
+    .cal-cell { background: var(--surface); min-height: 60px; padding: 0.4rem; display: flex; flex-direction: column; gap: 0.15rem; }
+    .cal-cell.empty { background: var(--bg); }
+    .cal-day { font-family: var(--mono); font-size: 0.72rem; color: var(--text-3); }
+    .cal-pnl { font-family: var(--mono); font-size: 0.82rem; font-weight: 500; }
+    .cal-trades { font-family: var(--mono); font-size: 0.62rem; color: var(--text-3); }
+    .cal-nav { display: flex; align-items: center; gap: 0.8rem; }
+    .cal-nav button { background: none; border: 1px solid var(--border-2); color: var(--text-3); font-family: var(--mono); font-size: 0.78rem; padding: 0.25rem 0.6rem; border-radius: 2px; cursor: pointer; }
+    .cal-nav button:hover { border-color: var(--orange); color: var(--orange); }
+    .cal-month { font-family: var(--mono); font-size: 0.88rem; color: var(--text-2); letter-spacing: 0.08em; }
+
     /* ── MOBILE RESPONSIVE ── */
     @media (max-width: 800px) {
       /* Header */
@@ -279,6 +292,12 @@
       /* Tables — reduce padding, allow scroll */
       .trades-table th, .trades-table td { padding: 0.45rem 0.7rem; font-size: 0.72rem; }
       th, td { padding: 0.5rem 0.7rem; font-size: 0.8rem; }
+
+      /* Calendar */
+      .cal-cell { min-height: 48px; padding: 0.3rem; }
+      .cal-pnl { font-size: 0.7rem; }
+      .cal-trades { font-size: 0.58rem; }
+      .cal-day { font-size: 0.65rem; }
 
       /* Chart containers */
       .chart-wrap { padding: 1rem; }
@@ -1491,6 +1510,80 @@ document.getElementById('h-total').textContent = fmt(endVal);
     });
   }
 
+  let calMonth = null; // null = auto-detect from trades
+
+  function setCalMonth(offset) {
+    const current = calMonth || new Date();
+    const next = new Date(current.getFullYear(), current.getMonth() + offset, 1);
+    calMonth = next;
+    renderTrades();
+  }
+
+  function renderCalendar(trades) {
+    // Group trades by close date
+    const byDay = {};
+    trades.forEach(t => {
+      const d = t.lastClose;
+      const key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+      if (!byDay[key]) byDay[key] = { pnl: 0, count: 0 };
+      byDay[key].pnl += t.totalPnL;
+      byDay[key].count++;
+    });
+
+    // Determine which month to show
+    let viewDate = calMonth;
+    if (!viewDate) {
+      // Default to the most recent trade's month
+      if (trades.length) {
+        const latest = trades[trades.length - 1].lastClose;
+        viewDate = new Date(latest.getFullYear(), latest.getMonth(), 1);
+      } else {
+        viewDate = new Date();
+      }
+    }
+
+    const year = viewDate.getFullYear();
+    const month = viewDate.getMonth();
+    const monthName = viewDate.toLocaleString('default', { month: 'long' });
+    const firstDow = new Date(year, month, 1).getDay(); // 0=Sun
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    // Build cells
+    let cells = '';
+    // Empty cells before first day
+    for (let i = 0; i < firstDow; i++) {
+      cells += '<div class="cal-cell empty"></div>';
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      const key = year + '-' + String(month+1).padStart(2,'0') + '-' + String(d).padStart(2,'0');
+      const data = byDay[key];
+      let inner = '<span class="cal-day">' + d + '</span>';
+      if (data) {
+        const cls = data.pnl >= 0 ? 'pos' : 'neg';
+        inner += '<span class="cal-pnl ' + cls + '">' + (data.pnl >= 0 ? '+' : '') + fmtN(data.pnl) + '</span>';
+        inner += '<span class="cal-trades">' + data.count + ' trade' + (data.count !== 1 ? 's' : '') + '</span>';
+      }
+      cells += '<div class="cal-cell">' + inner + '</div>';
+    }
+
+    return `<div class="section-title">Calendar</div>
+    <div class="chart-wrap" style="padding:1.2rem 1.6rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.8rem">
+        <div class="cal-nav">
+          <button onclick="setCalMonth(-1)">◀</button>
+          <span class="cal-month">${monthName} ${year}</span>
+          <button onclick="setCalMonth(1)">▶</button>
+        </div>
+      </div>
+      <div style="border:1px solid var(--border)">
+        <div class="cal-grid">
+          <div class="cal-hdr">Sun</div><div class="cal-hdr">Mon</div><div class="cal-hdr">Tue</div><div class="cal-hdr">Wed</div><div class="cal-hdr">Thu</div><div class="cal-hdr">Fri</div><div class="cal-hdr">Sat</div>
+          ${cells}
+        </div>
+      </div>
+    </div>`;
+  }
+
   function renderRollingChart(trades) {
     const WINDOW = 10;
     if (trades.length < WINDOW) return '<div class="section-title">Rolling ' + WINDOW + ' Trades</div><div class="chart-wrap" style="padding:1.2rem 1.6rem"><p style="font-family:var(--mono);font-size:0.8rem;color:var(--text-3)">Need ' + WINDOW + '+ trades to display</p></div>';
@@ -2234,6 +2327,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
       </div>
 
 
+      ${renderCalendar(filteredTrades)}
       ${renderRollingChart(filteredTrades)}
       ${renderBucketAnalysis(filteredTrades)}
       ${renderTimeOfDay(filteredTrades)}
