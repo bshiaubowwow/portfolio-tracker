@@ -1811,7 +1811,8 @@ document.getElementById('h-total').textContent = fmt(endVal);
       const bAvgWin = bWinners.length ? bWinners.reduce((s,t) => s + t.totalPnL, 0) / bWinners.length : 0;
       const bAvgLoss = bLosers.length ? Math.abs(bLosers.reduce((s,t) => s + t.totalPnL, 0) / bLosers.length) : 0;
       const expectancy = count ? (winRate/100 * bAvgWin) + ((1 - winRate/100) * -bAvgLoss) : 0;
-      return { bucket: b, count, expectancy, winRate, avgPnL, totalPnL };
+      const avgPnlPct = count ? bTrades.reduce((s,t) => s + t.pnlPct, 0) / count : 0;
+      return { bucket: b, count, expectancy, winRate, avgPnlPct, avgPnL, totalPnL };
     });
 
     return `<div class="section-title">Performance by Factor</div>
@@ -1823,13 +1824,14 @@ document.getElementById('h-total').textContent = fmt(endVal);
     <div class="trades-table-wrap">
       <table class="trades-table">
         <thead><tr>
-          <th>${metric.label}</th><th>Trades</th><th>Expectancy</th><th>Win Rate</th><th>Avg P&L</th><th>Total P&L</th>
+          <th>${metric.label}</th><th>Trades</th><th>Expectancy</th><th>Win Rate</th><th>Avg P&L %</th><th>Avg P&L</th><th>Total P&L</th>
         </tr></thead>
         <tbody>${rows.map(r => `<tr>
           <td style="color:var(--text-1);font-weight:500">${r.bucket}</td>
           <td>${r.count}</td>
           <td class="${cls(r.expectancy)}">${fmtS(r.expectancy)}</td>
           <td class="${r.winRate>=50?'pos':'neg'}">${r.winRate.toFixed(0)}%</td>
+          <td class="${cls(r.avgPnlPct)}">${(r.avgPnlPct>=0?'+':'') + r.avgPnlPct.toFixed(1)}%</td>
           <td class="${cls(r.avgPnL)}">${fmtS(r.avgPnL)}</td>
           <td class="${cls(r.totalPnL)}">${fmtS(r.totalPnL)}</td>
         </tr>`).join('')}</tbody>
@@ -1873,20 +1875,22 @@ document.getElementById('h-total').textContent = fmt(endVal);
       const sAvgWin = sWinners.length ? sWinners.reduce((s,t) => s + t.totalPnL, 0) / sWinners.length : 0;
       const sAvgLoss = sLosers.length ? Math.abs(sLosers.reduce((s,t) => s + t.totalPnL, 0) / sLosers.length) : 0;
       const expectancy = count ? (winRate/100 * sAvgWin) + ((1 - winRate/100) * -sAvgLoss) : null;
+      const avgPnlPct = count ? sTrades.reduce((s,t) => s + t.pnlPct, 0) / count : null;
       const label = slotLabel(slot) + ' – ' + slotLabel(slot + 1);
-      return { slot, label, count, expectancy, winRate, avgPnL, totalPnL, empty: count === 0 };
+      return { slot, label, count, expectancy, winRate, avgPnlPct, avgPnL, totalPnL, empty: count === 0 };
     });
     return `<div class="section-title">Performance by Time of Day <span style="font-size:0.65rem;color:var(--text-3);letter-spacing:0.06em;text-transform:none">(Day Trades — entry time, PT)</span></div>
     <div class="trades-table-wrap">
       <table class="trades-table">
         <thead><tr>
-          <th>Time</th><th>Trades</th><th>Expectancy</th><th>Win Rate</th><th>Avg P&L</th><th>Total P&L</th>
+          <th>Time</th><th>Trades</th><th>Expectancy</th><th>Win Rate</th><th>Avg P&L %</th><th>Avg P&L</th><th>Total P&L</th>
         </tr></thead>
         <tbody>${rows.map(r => `<tr>
           <td style="color:var(--text-1);font-weight:500">${r.label}</td>
           <td>${r.count}</td>
           <td class="${r.expectancy!==null?cls(r.expectancy):''}">${r.expectancy!==null ? fmtS(r.expectancy) : '—'}</td>
           <td class="${r.winRate>=50?'pos':'neg'}">${r.winRate.toFixed(0)}%</td>
+          <td class="${r.avgPnlPct!==null?cls(r.avgPnlPct):''}">${r.avgPnlPct!==null ? (r.avgPnlPct>=0?'+':'') + r.avgPnlPct.toFixed(1) + '%' : '—'}</td>
           <td class="${r.avgPnL!==null?cls(r.avgPnL):''}">${r.avgPnL!==null ? fmtS(r.avgPnL) : '—'}</td>
           <td class="${cls(r.totalPnL)}">${fmtS(r.totalPnL)}</td>
         </tr>`).join('')}</tbody>
