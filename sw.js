@@ -1,4 +1,4 @@
-const CACHE_NAME = 'portfolio-v1';
+const CACHE_NAME = 'portfolio-v2';
 const SHELL_ASSETS = [
   '/portfolio-tracker/',
   '/portfolio-tracker/index.html',
