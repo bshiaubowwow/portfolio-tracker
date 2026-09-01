@@ -1590,7 +1590,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
     const metrics = {
       avgPnL: { label: 'Avg P&L', fn: function(slice) { return slice.length ? slice.reduce(function(s,t){return s+t.totalPnL},0)/slice.length : 0; }, fmt: function(v){return (v>=0?'+':'')+fmtN(v);} },
       winRate: { label: 'Win Rate', fn: function(slice) { var wins = slice.filter(function(t){return t.totalPnL>0}).length; return slice.length ? wins/slice.length*100 : 0; }, fmt: function(v){return v.toFixed(0)+'%';} },
-      winLoss: { label: 'Win:Loss', fn: function(slice) { var w=slice.filter(function(t){return t.totalPnL>0}); var l=slice.filter(function(t){return t.totalPnL<0}); var avgW=w.length?w.reduce(function(s,t){return s+t.totalPnL},0)/w.length:0; var avgL=l.length?Math.abs(l.reduce(function(s,t){return s+t.totalPnL},0)/l.length):0; return avgL>0?avgW/avgL:0; }, fmt: function(v){return '1:'+v.toFixed(1);} },
+      winLoss: { label: 'Win:Loss', fn: function(slice) { var w=slice.filter(function(t){return t.totalPnL>0}); var l=slice.filter(function(t){return t.totalPnL<0}); var avgW=w.length?w.reduce(function(s,t){return s+t.totalPnL},0)/w.length:0; var avgL=l.length?Math.abs(l.reduce(function(s,t){return s+t.totalPnL},0)/l.length):0; return avgL>0?avgW/avgL:0; }, fmt: function(v){return v.toFixed(1)+':1';} },
     };
     var m = metrics[rollingMetric];
     var points = [];
@@ -1619,7 +1619,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
     var fmts = {
       avgPnL: function(v){return (v>=0?'+':'')+fmtN(v);},
       winRate: function(v){return v.toFixed(0)+'%';},
-      winLoss: function(v){return '1:'+v.toFixed(1);},
+      winLoss: function(v){return v.toFixed(1)+':1';},
     };
     var fn = metrics[rollingMetric];
     var fmt2 = fmts[rollingMetric];
@@ -2144,7 +2144,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
     const avgWin$  = winners.length ? winners.reduce((s,t) => s + t.totalPnL, 0) / winners.length : 0;
     const avgLoss$ = losers.length ? Math.abs(losers.reduce((s,t) => s + t.totalPnL, 0) / losers.length) : 0;
     const rrNum    = avgLoss$ > 0 ? avgWin$ / avgLoss$ : null;
-    const rrRatio  = rrNum !== null ? '1:' + rrNum.toFixed(1) : '—';
+    const rrRatio  = rrNum !== null ? rrNum.toFixed(1) + ':1' : '—';
     const breakeven = rrNum !== null ? (1 / (1 + rrNum)) * 100 : null;
     const expectancy = filteredTrades.length ? (winRate/100 * avgWin$) + ((1 - winRate/100) * -avgLoss$) : null;
     const startBalance = filteredTrades.length ? (function() { var d = lookupDaily(filteredTrades[0].openTime); return d ? d.balance : null; })() : null;
