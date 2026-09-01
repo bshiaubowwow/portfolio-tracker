@@ -1824,7 +1824,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
     <div class="trades-table-wrap">
       <table class="trades-table">
         <thead><tr>
-          <th>${metric.label}</th><th>Trades</th><th>Expectancy</th><th>Win Rate</th><th>Avg P&L %</th><th>Avg P&L</th><th>Total P&L</th>
+          <th>${metric.label}</th><th>Trades</th><th>Expectancy</th><th>Win Rate</th><th>Avg P&L %</th><th>Total P&L</th>
         </tr></thead>
         <tbody>${rows.map(r => `<tr>
           <td style="color:var(--text-1);font-weight:500">${r.bucket}</td>
@@ -1832,7 +1832,6 @@ document.getElementById('h-total').textContent = fmt(endVal);
           <td class="${cls(r.expectancy)}">${fmtS(r.expectancy)}</td>
           <td class="${r.winRate>=50?'pos':'neg'}">${r.winRate.toFixed(0)}%</td>
           <td class="${cls(r.avgPnlPct)}">${(r.avgPnlPct>=0?'+':'') + r.avgPnlPct.toFixed(1)}%</td>
-          <td class="${cls(r.avgPnL)}">${fmtS(r.avgPnL)}</td>
           <td class="${cls(r.totalPnL)}">${fmtS(r.totalPnL)}</td>
         </tr>`).join('')}</tbody>
       </table>
@@ -1883,7 +1882,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
     <div class="trades-table-wrap">
       <table class="trades-table">
         <thead><tr>
-          <th>Time</th><th>Trades</th><th>Expectancy</th><th>Win Rate</th><th>Avg P&L %</th><th>Avg P&L</th><th>Total P&L</th>
+          <th>Time</th><th>Trades</th><th>Expectancy</th><th>Win Rate</th><th>Avg P&L %</th><th>Total P&L</th>
         </tr></thead>
         <tbody>${rows.map(r => `<tr>
           <td style="color:var(--text-1);font-weight:500">${r.label}</td>
@@ -1891,7 +1890,6 @@ document.getElementById('h-total').textContent = fmt(endVal);
           <td class="${r.expectancy!==null?cls(r.expectancy):''}">${r.expectancy!==null ? fmtS(r.expectancy) : '—'}</td>
           <td class="${r.winRate>=50?'pos':'neg'}">${r.winRate.toFixed(0)}%</td>
           <td class="${r.avgPnlPct!==null?cls(r.avgPnlPct):''}">${r.avgPnlPct!==null ? (r.avgPnlPct>=0?'+':'') + r.avgPnlPct.toFixed(1) + '%' : '—'}</td>
-          <td class="${r.avgPnL!==null?cls(r.avgPnL):''}">${r.avgPnL!==null ? fmtS(r.avgPnL) : '—'}</td>
           <td class="${cls(r.totalPnL)}">${fmtS(r.totalPnL)}</td>
         </tr>`).join('')}</tbody>
       </table>
