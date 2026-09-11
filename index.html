@@ -1134,8 +1134,9 @@ document.getElementById('h-total').textContent = fmt(endVal);
 
   // ── TRADES ──
   function tradesUrl() { return API + '?tab=WB%20Brokerage%20Trades&_=' + Date.now(); }
-  function dailyUrl() { return API + '?tab=WB%20Daily&_=' + Date.now(); }
+  function sizeCalcUrl() { return API + '?tab=WB%20Size%20Calc&_=' + Date.now(); }
   let _dailyData   = null;
+  let _sizeCalcData = null; // { startBalance, startDate, transfers: [{date, amount}] }
 
   function parseCSV(text) {
     const lines = text.trim().split('\n');
@@ -1294,9 +1295,9 @@ document.getElementById('h-total').textContent = fmt(endVal);
     return { closed, open };
   }
 
-  async function loadDaily() {
+  async function loadSizeCalc() {
     try {
-      const res = await fetch(dailyUrl());
+      const res = await fetch(sizeCalcUrl());
       const json = await res.json();
       if (json.error) return;
       function normalizeDate(val) {
@@ -1305,14 +1306,90 @@ document.getElementById('h-total').textContent = fmt(endVal);
         if (isNaN(d)) return String(val).slice(0,10);
         return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
       }
-      _dailyData = json.data
-        .filter(r => r['Date'] && r['Starting Balance'])
-        .map(r => ({
-          date: normalizeDate(r['Date']),
-          balance: parseFloat(String(r['Starting Balance']).replace(/[$,]/g,'')) || 0,
-        }))
-        .sort((a,b) => new Date(a.date) - new Date(b.date));
-    } catch(e) { console.error('Daily load error:', e); }
+      // Sheet layout (served with row 1 as headers):
+      // Headers: "Starting Balance" (col A), "" or second col name (col B)
+      // Row 2 → { "Starting Balance": "as of 9/11/2026", colB: 4178 }
+      // Row 4 → { "Starting Balance": "Date", colB: "Deposit (+)/Withdrawal (-)" }
+      // Row 5+ → { "Starting Balance": "9/11/2026", colB: amount }
+      let startBalance = null, startDate = null;
+      const transfers = [];
+      const rows = json.data;
+      const keys = rows.length ? Object.keys(rows[0]) : [];
+      const keyA = keys[0] || 'Starting Balance';
+      const keyB = keys[1] || '';
+      let inTransferSection = false;
+      for (const r of rows) {
+        const colA = String(r[keyA] || '').trim();
+        const colB = r[keyB];
+        // "as of" row → starting balance
+        if (colA.toLowerCase().startsWith('as of')) {
+          const dateMatch = colA.match(/as of\s+(.+)/i);
+          if (dateMatch) startDate = normalizeDate(dateMatch[1]);
+          startBalance = parseFloat(String(colB).replace(/[$,]/g, '')) || 0;
+          continue;
+        }
+        // "Date" row → marks start of transfer section
+        if (colA.toLowerCase() === 'date') {
+          inTransferSection = true;
+          continue;
+        }
+        // Skip empty rows and the header row value
+        if (!colA || colA.toLowerCase().startsWith('starting')) continue;
+        // Transfer entries
+        if (inTransferSection) {
+          const d = normalizeDate(colA);
+          const amt = parseFloat(String(colB).replace(/[$,]/g, ''));
+          if (d && !isNaN(amt) && amt !== 0) {
+            transfers.push({ date: d, amount: amt });
+          }
+        }
+      }
+      transfers.sort((a, b) => a.date.localeCompare(b.date));
+      _sizeCalcData = { startBalance, startDate, transfers };
+      console.log('Size calc loaded:', _sizeCalcData);
+    } catch(e) { console.error('Size calc load error:', e); }
+  }
+
+  function buildDailyBalances(closedLots) {
+    if (!_sizeCalcData || _sizeCalcData.startBalance === null) return;
+    const { startBalance, startDate, transfers } = _sizeCalcData;
+    // Collect all unique dates from closed lots and transfers
+    const dateSet = new Set();
+    if (startDate) dateSet.add(startDate);
+    const lots = closedLots || [];
+    lots.forEach(lot => {
+      const d = parseTradeDate(lot.closeTime.replace(/\s*\(.*\)$/, ''));
+      if (!isNaN(d)) {
+        dateSet.add(d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'));
+      }
+      // Also add open dates so we have balance for sizing
+      const od = parseTradeDate(lot.openTime);
+      if (!isNaN(od)) {
+        dateSet.add(od.getFullYear() + '-' + String(od.getMonth()+1).padStart(2,'0') + '-' + String(od.getDate()).padStart(2,'0'));
+      }
+    });
+    transfers.forEach(tr => dateSet.add(tr.date));
+    // Also add today
+    const now = new Date();
+    dateSet.add(now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0'));
+
+    const allDates = [...dateSet].filter(d => d >= startDate).sort();
+    // For each date, balance = startBalance + P&L from lots closed BEFORE that date + transfers BEFORE that date
+    _dailyData = allDates.map(dateStr => {
+      let cumPnL = 0;
+      lots.forEach(lot => {
+        const d = parseTradeDate(lot.closeTime.replace(/\s*\(.*\)$/, ''));
+        if (!isNaN(d)) {
+          const closeDate = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+          if (closeDate < dateStr) cumPnL += lot.pnl;
+        }
+      });
+      let cumTransfers = 0;
+      transfers.forEach(tr => {
+        if (tr.date < dateStr) cumTransfers += tr.amount;
+      });
+      return { date: dateStr, balance: startBalance + cumPnL + cumTransfers };
+    });
   }
 
   function lookupDaily(dateStr) {
@@ -1397,14 +1474,16 @@ document.getElementById('h-total').textContent = fmt(endVal);
     const wrap = document.getElementById('trades-content');
     wrap.innerHTML = '<div class="status-banner">Loading trades...</div>';
     try {
-      await loadDaily();
-      const res  = await fetch(tradesUrl());
-      const json = await res.json();
+      // Fetch size calc and trades in parallel
+      const [, tradesRes] = await Promise.all([loadSizeCalc(), fetch(tradesUrl())]);
+      const json = await tradesRes.json();
       if (json.error) throw new Error(json.error);
       _tradesData   = reconstructTrades(json.data);
       console.log('Closed lots:', _tradesData.closed.map(t => ({sym: t.symbol, qty: t.qty, entry: t.entryPrice, exit: t.exitPrice, pnl: t.pnl})));
       console.log('Open:', _tradesData.open.map(t => ({sym: t.symbol, qty: t.qty, entry: t.entryPrice, cost: t.totalCost})));
       try { _tradesData = await resolveSettlements(_tradesData); } catch(se) {}
+      // Build daily balances from starting balance + closed lot P&L + transfers
+      buildDailyBalances(_tradesData.closed);
       _tradesLoaded = true;
       renderTrades();
     } catch(e) {
@@ -1771,7 +1850,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
       const valid = trades.filter(t => t.sizePct !== null).sort((a,b) => a.sizePct - b.sizePct);
       if (!valid.length) return `<div class="section-title">Performance by Factor</div>
       <div style="margin-bottom:0.8rem"><select onchange="setBucketMetric(this.value)" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);font-family:var(--mono);font-size:0.78rem;padding:0.35rem 0.6rem;border-radius:3px;outline:none;cursor:pointer">${options}</select></div>
-      <div class="trades-table-wrap"><p style="font-family:var(--mono);font-size:0.8rem;color:var(--text-3);padding:1rem">No size data — need WB Daily entries</p></div>`;
+      <div class="trades-table-wrap"><p style="font-family:var(--mono);font-size:0.8rem;color:var(--text-3);padding:1rem">No size data — need WB Size Calc starting balance</p></div>`;
       const q1 = valid[Math.floor(valid.length * 0.25)].sizePct;
       const q2 = valid[Math.floor(valid.length * 0.5)].sizePct;
       const q3 = valid[Math.floor(valid.length * 0.75)].sizePct;

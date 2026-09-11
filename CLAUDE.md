@@ -23,9 +23,12 @@ Single HTML file dashboard for tracking multi-account investments and day tradin
 - Some Avg Price cells have `@` prefix — strip before parseFloat
 - Status must be "Filled"
 
-**WB Daily** — daily opening balance for the day trading account
-- Columns (case-sensitive): `Date`, `Starting Balance`
-- Date format in sheet: `8/5/2026` (M/D/YYYY) — code normalizes to YYYY-MM-DD
+**WB Size Calc** — starting balance + transfer log for dynamic daily balance computation
+- Row 1: "Starting Balance" header
+- Row 2: "as of M/D/YYYY" in col A, dollar amount in col B (e.g. $4,178)
+- Row 4: "Date" | "Deposit (+)/Withdrawal (-)" headers
+- Row 5+: transfer entries (date, signed dollar amount — positive=deposit, negative=withdrawal)
+- Daily balances are computed dynamically: starting balance + cumulative closed trade P&L + cumulative transfers
 - Used for Size % calculation and account return %
 
 ## Two Tabs
@@ -49,7 +52,7 @@ Core sections in order:
 ## Key Calculations
 
 - **Size %** = cost basis / daily opening balance
-- **Win:Loss** = avg winning P&L / |avg losing P&L|, displayed as 1:X
+- **Win:Loss** = avg winning P&L / |avg losing P&L|, displayed as X:1
 - **Breakeven WR** = 1 / (1 + reward/risk) × 100
 - **Account Return %** = total P&L / starting balance for the period
 - Trades are aggregated at contract level (same option symbol = one trade regardless of adds/trims)
@@ -59,7 +62,7 @@ Core sections in order:
 ## Important Quirks
 
 - Webull doesn't generate sell fills for expired options — code detects and auto-closes as worthless
-- SPXW/SPX/XSP ITM expirations: fetched via Yahoo Finance through allorigins.win CORS proxy, cached in localStorage
+- SPXW/SPX/XSP ITM expirations: fetched via Yahoo Finance through Google Apps Script server-side proxy, cached in localStorage
 - Alpha values in Data sheet are per-period (not cumulative) — must skip starting row with `.slice(1)`
 - `parseTradeDate()` strips timezone abbreviations before parsing
 - Header stats switch between portfolio and trades view
@@ -76,5 +79,5 @@ Core sections in order:
 - Primarily trades SPY/SPX/SPXW 0DTE options
 - Day trading with occasional swings
 - Risk is 100% (sizing for full premium loss)
-- WB Daily tab is manually entered each trading day
+- WB Size Calc tab has a one-time starting balance; daily balances computed from trades + transfers automatically
 - WB Brokerage Trades is a paste-over from Webull export (never manually add rows)

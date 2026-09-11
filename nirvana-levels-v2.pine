@@ -1,0 +1,670 @@
+//@version=6
+indicator("Nirvana Levels", overlay=true, max_lines_count=500, max_boxes_count=500, max_bars_back=5000)
+
+// ==========================================
+// INPUTS & CONFIGURATION
+// ==========================================
+// Timeframe Settings
+mo_min_tf       = input.int(30,   title="Monthly Min TF (min)", group="Timeframe Settings")
+wk_min_tf       = input.int(15,   title="Weekly Min TF (min)", group="Timeframe Settings")
+wk_max_tf       = input.int(240,  title="Weekly Max TF (min)", group="Timeframe Settings")
+htf_max_tf      = input.int(30,   title="Max TF for Daily Levels & OR (min)", group="Timeframe Settings")
+ltf_max_tf      = input.int(5,    title="Max TF for Premarket Levels (min)", group="Timeframe Settings")
+
+// Level Toggles
+show_mo         = input.bool(true,  title="Show Last Month High / Low (MKH/MKL)", group="Level Toggles")
+show_wk         = input.bool(true,  title="Show Last Week High / Low (WKH/WKL)", group="Level Toggles")
+show_yd         = input.bool(true,  title="Show Yesterday RTH (YDH/YDL/YDC)", group="Level Toggles")
+show_pm         = input.bool(true,  title="Show Premarket (PMH/PML)", group="Level Toggles")
+show_or         = input.bool(true,  title="Show 30m OR Box & Mid", group="Level Toggles")
+advance_after_close = input.bool(true, title="Advance Levels After RTH Close", group="Level Toggles",
+    tooltip="Show completed session levels immediately after RTH close for next-session planning. Turn off for trade recaps.")
+
+// Timeframe Alignment Signal
+show_tf_signal  = input.bool(true,  title="Show TF Alignment Signal", group="TF Alignment")
+tf_table_pos    = input.string("bottom_right", title="Table Position", options=["bottom_right", "bottom_left", "top_right", "top_left"], group="TF Alignment")
+tf_table_size   = input.string("small", title="Table Size", options=["tiny", "small", "normal"], group="TF Alignment")
+
+// Styling & Colors - Monthly
+color_mkh       = input.color(color.purple,              title="MKH Color", group="Style - Monthly")
+style_mkh       = input.string("Dashed",                 title="MKH Style", options=["Solid", "Dashed", "Dotted"], group="Style - Monthly")
+width_mkh       = input.int(2,                           title="MKH Thickness", minval=1, maxval=5, group="Style - Monthly")
+
+color_mkl       = input.color(color.purple,              title="MKL Color", group="Style - Monthly")
+style_mkl       = input.string("Dashed",                 title="MKL Style", options=["Solid", "Dashed", "Dotted"], group="Style - Monthly")
+width_mkl       = input.int(2,                           title="MKL Thickness", minval=1, maxval=5, group="Style - Monthly")
+
+// Styling & Colors - Weekly
+color_wkh       = input.color(color.blue,                title="WKH Color", group="Style - Weekly")
+style_wkh       = input.string("Solid",                  title="WKH Style", options=["Solid", "Dashed", "Dotted"], group="Style - Weekly")
+width_wkh       = input.int(2,                           title="WKH Thickness", minval=1, maxval=5, group="Style - Weekly")
+
+color_wkl       = input.color(color.blue,                title="WKL Color", group="Style - Weekly")
+style_wkl       = input.string("Solid",                  title="WKL Style", options=["Solid", "Dashed", "Dotted"], group="Style - Weekly")
+width_wkl       = input.int(2,                           title="WKL Thickness", minval=1, maxval=5, group="Style - Weekly")
+
+// Styling & Colors - Daily
+color_ydh       = input.color(color.green,               title="YDH Color", group="Style - Daily")
+style_ydh       = input.string("Solid",                  title="YDH Style", options=["Solid", "Dashed", "Dotted"], group="Style - Daily")
+width_ydh       = input.int(2,                           title="YDH Thickness", minval=1, maxval=5, group="Style - Daily")
+
+color_ydl       = input.color(color.red,                 title="YDL Color", group="Style - Daily")
+style_ydl       = input.string("Solid",                  title="YDL Style", options=["Solid", "Dashed", "Dotted"], group="Style - Daily")
+width_ydl       = input.int(2,                           title="YDL Thickness", minval=1, maxval=5, group="Style - Daily")
+
+color_ydc       = input.color(color.gray,                title="YDC Color", group="Style - Daily")
+style_ydc       = input.string("Dashed",                 title="YDC Style", options=["Solid", "Dashed", "Dotted"], group="Style - Daily")
+width_ydc       = input.int(1,                           title="YDC Thickness", minval=1, maxval=5, group="Style - Daily")
+
+// Styling & Colors - Premarket
+color_pmh       = input.color(color.new(color.green, 30), title="PMH Color", group="Style - Premarket")
+style_pmh       = input.string("Dotted",                 title="PMH Style", options=["Solid", "Dashed", "Dotted"], group="Style - Premarket")
+width_pmh       = input.int(1,                           title="PMH Thickness", minval=1, maxval=5, group="Style - Premarket")
+
+color_pml       = input.color(color.new(color.red, 30),   title="PML Color", group="Style - Premarket")
+style_pml       = input.string("Dotted",                 title="PML Style", options=["Solid", "Dashed", "Dotted"], group="Style - Premarket")
+width_pml       = input.int(1,                           title="PML Thickness", minval=1, maxval=5, group="Style - Premarket")
+
+// OR Box Specific Controls
+show_or_border  = input.bool(true,  title="Show OR Box Border Lines", group="Style - OR Box")
+color_or_border = input.color(color.orange,               title="OR Border Color", group="Style - OR Box")
+color_or_fill   = input.color(color.new(color.orange, 85),title="OR Box Fill Color", group="Style - OR Box")
+
+// OR Mid & Projections Controls
+show_or_mid     = input.bool(true,   title="Show OR Midpoint Line", group="Style - OR Box")
+color_or_mid    = input.color(color.gray,                title="OR Midpoint Color", group="Style - OR Box")
+
+show_or_ext_05  = input.bool(true,   title="Show 0.5x Projections", group="Style - OR Box")
+show_or_ext_10  = input.bool(true,   title="Show 1.0x Projections", group="Style - OR Box")
+show_or_ext_15  = input.bool(false,  title="Show 1.5x Projections", group="Style - OR Box")
+show_or_ext_20  = input.bool(false,  title="Show 2.0x Projections", group="Style - OR Box")
+
+color_or_ext    = input.color(color.orange,              title="OR Projection Color", group="Style - OR Box")
+style_or_ext    = input.string("Dotted",                 title="OR Projection Style", options=["Solid", "Dashed", "Dotted"], group="Style - OR Box")
+width_or_ext    = input.int(1,                           title="OR Projection Thickness", minval=1, maxval=5, group="Style - OR Box")
+
+// ==========================================
+// HELPER FUNCTIONS
+// ==========================================
+f_style(s) =>
+    s == "Dashed" ? line.style_dashed : s == "Dotted" ? line.style_dotted : line.style_solid
+
+// Convert chart timeframe into normalized minutes
+tf_in_minutes = timeframe.isintraday ? timeframe.multiplier : timeframe.isdaily ? 1440 : timeframe.isweekly ? 10080 : timeframe.ismonthly ? 43200 : 0
+
+// ==========================================
+// TIMEFRAME VISIBILITY CONDITIONS
+// ==========================================
+show_mo_vis       = show_mo and (tf_in_minutes >= mo_min_tf)
+show_wk_vis       = show_wk and (tf_in_minutes >= wk_min_tf) and (tf_in_minutes <= wk_max_tf or tf_in_minutes >= 1440)
+show_daily_vis    = show_yd and timeframe.isintraday and (tf_in_minutes <= htf_max_tf)
+show_pm_vis       = show_pm and timeframe.isintraday and (tf_in_minutes <= ltf_max_tf)
+show_or_vis       = show_or and timeframe.isintraday and (tf_in_minutes <= htf_max_tf)
+
+// ==========================================
+// PACIFIC TIME & SESSION TRACKING
+// ==========================================
+int t_pst_h = hour(time, "America/Los_Angeles")
+int t_pst_m = minute(time, "America/Los_Angeles")
+int t_pst_hhmm = (t_pst_h * 100) + t_pst_m
+
+// RTH detection: explicit time boundaries in PST
+// CME equity index futures RTH: 9:30 AM - 4:15 PM ET = 6:30 AM - 1:15 PM PST
+// NYSE/NASDAQ equities RTH:     9:30 AM - 4:00 PM ET = 6:30 AM - 1:00 PM PST
+// On daily+ TFs, bars are already RTH for equities; treat all weekday bars as RTH
+int t_pst_dow = dayofweek(time, "America/Los_Angeles")
+bool is_weekday = (t_pst_dow >= dayofweek.monday and t_pst_dow <= dayofweek.friday)
+int rth_close_pst = syminfo.type == "futures" ? 1316 : 1300  // 1:15 PM vs 1:00 PM PST
+bool in_rth = (tf_in_minutes < 1440) ? (is_weekday and t_pst_hhmm >= 630 and t_pst_hhmm < rth_close_pst) : is_weekday
+
+// OR window: 6:30 AM - 7:00 AM PST (= 9:30 AM - 10:00 AM ET)
+bool is_or_bar = (t_pst_hhmm >= 630 and t_pst_hhmm < 700)
+
+// Session & calendar boundaries
+bool new_session = ta.change(time("1D")) != 0    // 3 PM PST for CME futures, 6:30 AM for equities
+bool new_cal_day = ta.change(dayofmonth(time, "America/Los_Angeles")) != 0
+
+// ==========================================
+// RTH PERIOD TRANSITION DETECTION
+// ==========================================
+// Detect the FIRST RTH bar of each new day/week/month.
+// This aligns price tracking with actual RTH boundaries,
+// preventing mismatches between tracked bars and tracked values.
+
+var int prev_rth_dom   = -1
+var int prev_rth_woy   = -1
+var int prev_rth_month = -1
+
+bool new_rth_day   = false
+bool new_rth_week  = false
+bool new_rth_month = false
+
+if in_rth
+    int cur_dom   = dayofmonth(time, "America/Los_Angeles")
+    int cur_woy   = weekofyear(time, "America/Los_Angeles")
+    int cur_month = month(time, "America/Los_Angeles")
+
+    if cur_dom != prev_rth_dom
+        new_rth_day := true
+        prev_rth_dom := cur_dom
+    if cur_woy != prev_rth_woy
+        new_rth_week := true
+        prev_rth_woy := cur_woy
+    if cur_month != prev_rth_month
+        new_rth_month := true
+        prev_rth_month := cur_month
+
+// ==========================================
+// PREMARKET STATE TRACKING
+// ==========================================
+// PM = any non-RTH bar BEFORE today's RTH starts
+// Futures: tracks full overnight (session start 3 PM PST → RTH 6:30 AM)
+// Equities: tracks traditional premarket (midnight → market open)
+
+var bool had_rth_today = false
+bool rth_completed = had_rth_today  // Capture before reset for PM reset logic
+
+if new_session
+    had_rth_today := false
+if new_cal_day and had_rth_today
+    had_rth_today := false
+if in_rth
+    had_rth_today := true
+
+bool in_pm = not in_rth and not had_rth_today
+
+// ==========================================
+// ADVANCE-AFTER-CLOSE DETECTION
+// ==========================================
+// Detect RTH → post-RTH transition and set persistent flags that stay active
+// until the next RTH period opens. Weekly advances only on Friday close,
+// monthly only on the last trading day of the month.
+var bool prev_bar_in_rth = false
+bool rth_close_event = prev_bar_in_rth and not in_rth
+prev_bar_in_rth := in_rth
+
+// Track which day/month RTH last ran (for weekly/monthly advance checks)
+var int last_rth_dow   = na
+var int last_rth_month_num = na
+if in_rth
+    last_rth_dow       := t_pst_dow
+    last_rth_month_num := month(time, "America/Los_Angeles")
+
+var bool adv_daily   = false
+var bool adv_weekly  = false
+var bool adv_monthly = false
+
+// Reset advance flags when the new RTH period starts (normal rotation takes over)
+if new_rth_day
+    adv_daily := false
+if new_rth_week
+    adv_weekly := false
+if new_rth_month
+    adv_monthly := false
+
+// Set advance flags at RTH close (ETH charts: transition-based detection)
+if advance_after_close and rth_close_event
+    adv_daily := true
+    if last_rth_dow == dayofweek.friday
+        adv_weekly := true
+    int next_day_month = month(time + 86400000, "America/Los_Angeles")
+    if next_day_month != last_rth_month_num
+        adv_monthly := true
+
+// RTH-only chart fallback: no post-RTH bars exist, so the transition above
+// never fires. On the chart's last bar, use real-world time to detect that
+// RTH has closed (or hasn't opened yet this morning, or it's a weekend).
+if barstate.islast and advance_after_close and not adv_daily
+    int now_hhmm = hour(timenow, "America/Los_Angeles") * 100 + minute(timenow, "America/Los_Angeles")
+    int now_dow  = dayofweek(timenow, "America/Los_Angeles")
+    bool now_weekend = (now_dow == dayofweek.saturday or now_dow == dayofweek.sunday)
+    if now_weekend or now_hhmm >= rth_close_pst or now_hhmm < 630
+        adv_daily := true
+        if now_weekend or now_dow == dayofweek.friday
+            adv_weekly := true
+        int today_mo = month(timenow, "America/Los_Angeles")
+        int tmrw_mo  = month(timenow + 86400000, "America/Los_Angeles")
+        if today_mo != tmrw_mo
+            adv_monthly := true
+
+// ==========================================
+// RTH PRICE SOURCE (request.security)
+// ==========================================
+// On higher TFs (1H+, Daily), individual bar highs/lows can mix RTH and ETH data.
+// request.security with an RTH ticker gives us accurate RTH-only prices.
+// Bar-by-bar tracking still provides anchor points (best-effort on coarse TFs).
+
+// Explicit RTH session strings (exchange timezone) — bypass session.regular which
+// can be unreliable on futures and doesn't re-filter pre-aggregated D bars.
+// NYSE/NASDAQ equities: 9:30 AM - 4:00 PM ET
+// CME equity index futures: 8:30 AM - 3:15 PM CT
+string rth_session = syminfo.type == "futures" ? "0830-1515:23456" : "0930-1600:23456"
+string rth_ticker = ticker.modify(syminfo.tickerid, rth_session)
+
+// RTH-accurate prices via security calls (used on TFs >= 60min)
+// [1] = previous completed period (normal mode)
+[sec_mo_h, sec_mo_l]              = request.security(rth_ticker, "1M", [high[1], low[1]], barmerge.gaps_off, barmerge.lookahead_on)
+[sec_wk_h, sec_wk_l]              = request.security(rth_ticker, "1W", [high[1], low[1]], barmerge.gaps_off, barmerge.lookahead_on)
+[sec_day_h, sec_day_l, sec_day_c] = request.security(rth_ticker, "1D", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_on)
+
+// [0] = current period (advance-after-close mode on higher TFs)
+[sec_mo_h0, sec_mo_l0]                = request.security(rth_ticker, "1M", [high, low], barmerge.gaps_off, barmerge.lookahead_on)
+[sec_wk_h0, sec_wk_l0]                = request.security(rth_ticker, "1W", [high, low], barmerge.gaps_off, barmerge.lookahead_on)
+[sec_day_h0, sec_day_l0, sec_day_c0]  = request.security(rth_ticker, "1D", [high, low, close], barmerge.gaps_off, barmerge.lookahead_on)
+
+// Note: On D charts for equities, daily bars are already RTH-only.
+// For futures on D, the bar includes the full session — sec_*_h/l calls
+// with the explicit RTH session handle that case.
+
+// ==========================================
+// TIMEFRAME ALIGNMENT SIGNAL
+// ==========================================
+// Two-cell table showing 5m and 30m EMA alignment state.
+// States:
+//   Bright green  = 8EMA > 21EMA, price > 8EMA  (confirmed bullish)
+//   Dim green     = 8EMA > 21EMA, price < 8EMA  (bull weakening)
+//   Dim red       = 8EMA < 21EMA, price > 8EMA  (bear weakening / early flip warning)
+//   Bright red    = 8EMA < 21EMA, price < 8EMA  (confirmed bearish)
+
+// Pull EMA values from 5m and 30m timeframes
+[ema8_5m, ema21_5m, close_5m]    = request.security(syminfo.tickerid, "5",  [ta.ema(close, 8), ta.ema(close, 21), close], barmerge.gaps_off, barmerge.lookahead_off)
+[ema8_30m, ema21_30m, close_30m] = request.security(syminfo.tickerid, "30", [ta.ema(close, 8), ta.ema(close, 21), close], barmerge.gaps_off, barmerge.lookahead_off)
+
+// Determine state for each timeframe
+// 5m state
+bool ema_bull_5m      = ema8_5m > ema21_5m
+bool price_above_8_5m = close_5m > ema8_5m
+
+// 30m state
+bool ema_bull_30m      = ema8_30m > ema21_30m
+bool price_above_8_30m = close_30m > ema8_30m
+
+// Color mapping function
+f_tf_color(bool ema_bull, bool price_above_8) =>
+    if ema_bull and price_above_8
+        color.new(#00C853, 0)       // bright green — confirmed bull
+    else if ema_bull and not price_above_8
+        color.new(#00C853, 60)      // dim green — bull weakening
+    else if not ema_bull and price_above_8
+        color.new(#FF1744, 60)      // dim red — bear weakening (early flip warning)
+    else
+        color.new(#FF1744, 0)       // bright red — confirmed bear
+
+color color_5m  = f_tf_color(ema_bull_5m, price_above_8_5m)
+color color_30m = f_tf_color(ema_bull_30m, price_above_8_30m)
+
+// Text color: white on bright, gray on dim for readability
+f_text_color(bool ema_bull, bool price_above_8) =>
+    if (ema_bull and price_above_8) or (not ema_bull and not price_above_8)
+        color.white     // bright state — white text
+    else
+        color.new(color.white, 40)  // dim state — slightly faded text
+
+color text_5m  = f_text_color(ema_bull_5m, price_above_8_5m)
+color text_30m = f_text_color(ema_bull_30m, price_above_8_30m)
+
+// Table size mapping
+var string tbl_size = switch tf_table_size
+    "tiny"   => size.tiny
+    "small"  => size.small
+    "normal" => size.normal
+    => size.small
+
+// Render table
+var table tf_table = na
+
+if show_tf_signal and timeframe.isintraday and tf_in_minutes <= htf_max_tf
+    if barstate.islast
+        if not na(tf_table)
+            table.delete(tf_table)
+        tf_table := table.new(tf_table_pos, 2, 1, border_width=1, border_color=color.new(color.gray, 70))
+
+        // Header row
+        table.cell(tf_table, 0, 0, "30m", text_color=text_30m, text_size=tbl_size, bgcolor=color_30m)
+        table.cell(tf_table, 1, 0, "5m",  text_color=text_5m,  text_size=tbl_size, bgcolor=color_5m)
+
+// ==========================================
+// BAR ANCHOR & PRICE TRACKING
+// ==========================================
+// Tracks which bar made the high/low during RTH for line anchoring.
+// On lower TFs (<60min): time filter is exact, uses raw bar high/low
+// On D+ charts: uses RTH-filtered daily OHLC from request.security
+//   so weekly/monthly aggregation excludes ETH data
+
+// Price source for tracking
+// Intraday: raw bar OHLC (filtered by in_rth time check)
+// D+ equities: raw bar OHLC (daily bars are already RTH-only)
+// D+ futures: raw bar OHLC (includes full session; sec_* calls provide RTH fallback)
+float bar_h = high
+float bar_l = low
+float bar_c = close
+
+// --- Period start bars (for anchoring on higher TFs where exact-bar is imprecise) ---
+// Uses chart-level period boundaries so anchors align with visible week/month divisions
+bool new_chart_month = ta.change(time("1M")) != 0
+bool new_chart_week  = ta.change(time("1W")) != 0
+bool new_chart_day   = ta.change(time("1D")) != 0
+
+var int cur_mo_start_bar  = na, var int prev_mo_start_bar = na
+var int cur_wk_start_bar  = na, var int prev_wk_start_bar = na
+var int cur_day_start_bar = na, var int prev_day_start_bar = na
+
+if new_chart_month
+    prev_mo_start_bar := cur_mo_start_bar
+    cur_mo_start_bar  := bar_index
+if new_chart_week
+    prev_wk_start_bar := cur_wk_start_bar
+    cur_wk_start_bar  := bar_index
+if new_chart_day
+    prev_day_start_bar := cur_day_start_bar
+    cur_day_start_bar  := bar_index
+
+// On higher TFs (>=60min), bars straddle RTH boundaries so prices come from
+// request.security. But we still need bar anchors. Track ALL bars on higher TFs
+// so the anchor points to the candle whose wick visually contains the level.
+// On lower TFs (<60min), keep the RTH filter since tracked prices are used directly.
+bool track_bar = in_rth or (tf_in_minutes >= 60)
+
+// --- Monthly ---
+var int cur_mo_high_bar = na,  var float cur_mo_high = na
+var int cur_mo_low_bar  = na,  var float cur_mo_low  = na
+var int last_mo_high_bar = na, var int last_mo_low_bar = na
+var float trk_mo_h = na,      var float trk_mo_l = na
+
+if new_rth_month
+    last_mo_high_bar := cur_mo_high_bar
+    last_mo_low_bar  := cur_mo_low_bar
+    trk_mo_h        := cur_mo_high
+    trk_mo_l        := cur_mo_low
+    cur_mo_high     := na
+    cur_mo_low      := na
+    cur_mo_high_bar := na
+    cur_mo_low_bar  := na
+
+if track_bar
+    if na(cur_mo_high) or bar_h > cur_mo_high
+        cur_mo_high     := bar_h
+        cur_mo_high_bar := bar_index
+    if na(cur_mo_low) or bar_l < cur_mo_low
+        cur_mo_low     := bar_l
+        cur_mo_low_bar := bar_index
+
+// --- Weekly ---
+var int cur_wk_high_bar = na,  var float cur_wk_high = na
+var int cur_wk_low_bar  = na,  var float cur_wk_low  = na
+var int last_wk_high_bar = na, var int last_wk_low_bar = na
+var float trk_wk_h = na,      var float trk_wk_l = na
+
+if new_rth_week
+    last_wk_high_bar := cur_wk_high_bar
+    last_wk_low_bar  := cur_wk_low_bar
+    trk_wk_h        := cur_wk_high
+    trk_wk_l        := cur_wk_low
+    cur_wk_high     := na
+    cur_wk_low      := na
+    cur_wk_high_bar := na
+    cur_wk_low_bar  := na
+
+if track_bar
+    if na(cur_wk_high) or bar_h > cur_wk_high
+        cur_wk_high     := bar_h
+        cur_wk_high_bar := bar_index
+    if na(cur_wk_low) or bar_l < cur_wk_low
+        cur_wk_low     := bar_l
+        cur_wk_low_bar := bar_index
+
+// --- Daily ---
+var int cur_day_high_bar  = na, var float cur_day_high  = na
+var int cur_day_low_bar   = na, var float cur_day_low   = na
+var int cur_day_close_bar = na, var float cur_day_close = na
+var int last_day_high_bar  = na
+var int last_day_low_bar   = na
+var int last_day_close_bar = na
+var float trk_yd_h = na, var float trk_yd_l = na, var float trk_yd_c = na
+
+if new_rth_day
+    last_day_high_bar  := cur_day_high_bar
+    last_day_low_bar   := cur_day_low_bar
+    last_day_close_bar := cur_day_close_bar
+    trk_yd_h          := cur_day_high
+    trk_yd_l          := cur_day_low
+    trk_yd_c          := cur_day_close
+    cur_day_high      := na
+    cur_day_low       := na
+    cur_day_close     := na
+    cur_day_high_bar  := na
+    cur_day_low_bar   := na
+    cur_day_close_bar := na
+
+if track_bar
+    if na(cur_day_high) or bar_h > cur_day_high
+        cur_day_high     := bar_h
+        cur_day_high_bar := bar_index
+    if na(cur_day_low) or bar_l < cur_day_low
+        cur_day_low     := bar_l
+        cur_day_low_bar := bar_index
+    cur_day_close     := bar_c
+    cur_day_close_bar := bar_index
+
+// --- Final level values ---
+// Lower TFs (<60min): time filter is exact per-bar, use tracked RTH prices
+// Higher TFs (60min+): bars straddle RTH boundaries, tracked values are inaccurate.
+//   Use request.security with RTH ticker instead (works on intraday charts;
+//   on D charts, equity daily bars are already RTH-only).
+bool use_tracked = (tf_in_minutes < 60)
+
+// Normal mode: show previous completed period
+float norm_mo_h = use_tracked ? (not na(trk_mo_h) ? trk_mo_h : sec_mo_h) : sec_mo_h
+float norm_mo_l = use_tracked ? (not na(trk_mo_l) ? trk_mo_l : sec_mo_l) : sec_mo_l
+float norm_wk_h = use_tracked ? (not na(trk_wk_h) ? trk_wk_h : sec_wk_h) : sec_wk_h
+float norm_wk_l = use_tracked ? (not na(trk_wk_l) ? trk_wk_l : sec_wk_l) : sec_wk_l
+float norm_yd_h = use_tracked ? (not na(trk_yd_h) ? trk_yd_h : sec_day_h) : sec_day_h
+float norm_yd_l = use_tracked ? (not na(trk_yd_l) ? trk_yd_l : sec_day_l) : sec_day_l
+float norm_yd_c = use_tracked ? (not na(trk_yd_c) ? trk_yd_c : sec_day_c) : sec_day_c
+
+// Advance mode: show current (just-completed) period
+// Lower TFs: cur_ values are RTH-only (tracked under in_rth gate)
+// Higher TFs: use current-period security values (RTH-accurate)
+float adv_yd_h = use_tracked ? cur_day_high : sec_day_h0
+float adv_yd_l = use_tracked ? cur_day_low  : sec_day_l0
+float adv_yd_c = use_tracked ? cur_day_close : sec_day_c0
+float adv_wk_h = use_tracked ? cur_wk_high  : sec_wk_h0
+float adv_wk_l = use_tracked ? cur_wk_low   : sec_wk_l0
+float adv_mo_h = use_tracked ? cur_mo_high  : sec_mo_h0
+float adv_mo_l = use_tracked ? cur_mo_low   : sec_mo_l0
+
+// Select: advance flags override normal values after RTH close
+float last_mo_h = adv_monthly ? adv_mo_h : norm_mo_h
+float last_mo_l = adv_monthly ? adv_mo_l : norm_mo_l
+float last_wk_h = adv_weekly  ? adv_wk_h : norm_wk_h
+float last_wk_l = adv_weekly  ? adv_wk_l : norm_wk_l
+float last_yd_h = adv_daily   ? adv_yd_h : norm_yd_h
+float last_yd_l = adv_daily   ? adv_yd_l : norm_yd_l
+float last_yd_c = adv_daily   ? adv_yd_c : norm_yd_c
+
+// --- Anchor bars ---
+// Normal: previous period's tracked bar. Advance: current period's tracked bar.
+int anchor_mo_h  = adv_monthly ? cur_mo_high_bar  : last_mo_high_bar
+int anchor_mo_l  = adv_monthly ? cur_mo_low_bar   : last_mo_low_bar
+int anchor_wk_h  = adv_weekly  ? cur_wk_high_bar  : last_wk_high_bar
+int anchor_wk_l  = adv_weekly  ? cur_wk_low_bar   : last_wk_low_bar
+int anchor_day_h = adv_daily   ? cur_day_high_bar  : last_day_high_bar
+int anchor_day_l = adv_daily   ? cur_day_low_bar   : last_day_low_bar
+int anchor_day_c = adv_daily   ? cur_day_close_bar : last_day_close_bar
+
+// ==========================================
+// PREMARKET LEVELS
+// ==========================================
+var float pmh_val = na, var int pmh_bar = na
+var float pml_val = na, var int pml_bar = na
+
+// Reset PM when a new session starts after RTH completed (futures: 3 PM PST)
+// Or at midnight after RTH completed (equities)
+if (new_session and rth_completed) or (new_cal_day and rth_completed)
+    pmh_val := na
+    pml_val := na
+    pmh_bar := na
+    pml_bar := na
+
+if in_pm
+    if na(pmh_val)
+        pmh_val := high
+        pml_val := low
+        pmh_bar := bar_index
+        pml_bar := bar_index
+    else
+        if high >= pmh_val
+            pmh_val := high
+            pmh_bar := bar_index
+        if low <= pml_val
+            pml_val := low
+            pml_bar := bar_index
+
+// ==========================================
+// 30-MINUTE OPENING RANGE
+// ==========================================
+var float or_high = na, var float or_low = na, var int or_start_bar = na
+
+if new_rth_day
+    or_high := na
+    or_low  := na
+    or_start_bar := na
+
+if is_or_bar
+    if na(or_high)
+        or_high := high
+        or_low  := low
+        or_start_bar := bar_index
+    else
+        or_high := math.max(or_high, high)
+        or_low  := math.min(or_low, low)
+
+// ==========================================
+// RENDERING (LINES & LABELS)
+// ==========================================
+var line l_mkh = na, var label lb_mkh = na
+var line l_mkl = na, var label lb_mkl = na
+var line l_wkh = na, var label lb_wkh = na
+var line l_wkl = na, var label lb_wkl = na
+var line l_ydh = na, var label lb_ydh = na
+var line l_ydl = na, var label lb_ydl = na
+var line l_ydc = na, var label lb_ydc = na
+var line l_pmh = na, var label lb_pmh = na
+var line l_pml = na, var label lb_pml = na
+var box  b_or  = na
+
+var line l_or_mid   = na
+var line l_or_up05  = na, var label lb_or_up05 = na
+var line l_or_up1   = na, var label lb_or_up1  = na
+var line l_or_up15  = na, var label lb_or_up15 = na
+var line l_or_up2   = na, var label lb_or_up2  = na
+var line l_or_dn05  = na, var label lb_or_dn05 = na
+var line l_or_dn1   = na, var label lb_or_dn1  = na
+var line l_or_dn15  = na, var label lb_or_dn15 = na
+var line l_or_dn2   = na, var label lb_or_dn2  = na
+
+if barstate.islast
+    line.delete(l_mkh), label.delete(lb_mkh)
+    line.delete(l_mkl), label.delete(lb_mkl)
+    line.delete(l_wkh), label.delete(lb_wkh)
+    line.delete(l_wkl), label.delete(lb_wkl)
+    line.delete(l_ydh), label.delete(lb_ydh)
+    line.delete(l_ydl), label.delete(lb_ydl)
+    line.delete(l_ydc), label.delete(lb_ydc)
+    line.delete(l_pmh), label.delete(lb_pmh)
+    line.delete(l_pml), label.delete(lb_pml)
+    box.delete(b_or)
+    line.delete(l_or_mid)
+
+    line.delete(l_or_up05), label.delete(lb_or_up05)
+    line.delete(l_or_up1), label.delete(lb_or_up1)
+    line.delete(l_or_up15), label.delete(lb_or_up15)
+    line.delete(l_or_up2), label.delete(lb_or_up2)
+    line.delete(l_or_dn05), label.delete(lb_or_dn05)
+    line.delete(l_or_dn1), label.delete(lb_or_dn1)
+    line.delete(l_or_dn15), label.delete(lb_or_dn15)
+    line.delete(l_or_dn2), label.delete(lb_or_dn2)
+
+    int label_offset = bar_index + 10
+
+    // Monthly
+    if show_mo_vis and not na(last_mo_h) and not na(anchor_mo_h)
+        l_mkh  := line.new(anchor_mo_h, last_mo_h, label_offset, last_mo_h, color=color_mkh, width=width_mkh, style=f_style(style_mkh))
+        lb_mkh := label.new(label_offset, last_mo_h, "MKH", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_mkh, size=size.small)
+    if show_mo_vis and not na(last_mo_l) and not na(anchor_mo_l)
+        l_mkl  := line.new(anchor_mo_l, last_mo_l, label_offset, last_mo_l, color=color_mkl, width=width_mkl, style=f_style(style_mkl))
+        lb_mkl := label.new(label_offset, last_mo_l, "MKL", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_mkl, size=size.small)
+
+    // Weekly
+    if show_wk_vis and not na(last_wk_h) and not na(anchor_wk_h)
+        l_wkh  := line.new(anchor_wk_h, last_wk_h, label_offset, last_wk_h, color=color_wkh, width=width_wkh, style=f_style(style_wkh))
+        lb_wkh := label.new(label_offset, last_wk_h, "WKH", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_wkh, size=size.small)
+    if show_wk_vis and not na(last_wk_l) and not na(anchor_wk_l)
+        l_wkl  := line.new(anchor_wk_l, last_wk_l, label_offset, last_wk_l, color=color_wkl, width=width_wkl, style=f_style(style_wkl))
+        lb_wkl := label.new(label_offset, last_wk_l, "WKL", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_wkl, size=size.small)
+
+    // Daily
+    if show_daily_vis and not na(last_yd_h) and not na(anchor_day_h)
+        l_ydh  := line.new(anchor_day_h, last_yd_h, label_offset, last_yd_h, color=color_ydh, width=width_ydh, style=f_style(style_ydh))
+        lb_ydh := label.new(label_offset, last_yd_h, "YDH", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_ydh, size=size.small)
+    if show_daily_vis and not na(last_yd_l) and not na(anchor_day_l)
+        l_ydl  := line.new(anchor_day_l, last_yd_l, label_offset, last_yd_l, color=color_ydl, width=width_ydl, style=f_style(style_ydl))
+        lb_ydl := label.new(label_offset, last_yd_l, "YDL", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_ydl, size=size.small)
+    if show_daily_vis and not na(last_yd_c) and not na(anchor_day_c)
+        l_ydc  := line.new(anchor_day_c, last_yd_c, label_offset, last_yd_c, color=color_ydc, width=width_ydc, style=f_style(style_ydc))
+        lb_ydc := label.new(label_offset, last_yd_c, "YDC", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_ydc, size=size.small)
+
+    // Premarket — hide stale PM after RTH close in advance mode.
+    // Once new PM tracking begins (in_pm), the fresh levels show again.
+    bool hide_pm_or = adv_daily and not in_pm
+    if show_pm_vis and not hide_pm_or
+        if not na(pmh_val) and not na(pmh_bar)
+            l_pmh  := line.new(pmh_bar, pmh_val, label_offset, pmh_val, color=color_pmh, width=width_pmh, style=f_style(style_pmh))
+            lb_pmh := label.new(label_offset, pmh_val, "PMH", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_pmh, size=size.small)
+        if not na(pml_val) and not na(pml_bar)
+            l_pml  := line.new(pml_bar, pml_val, label_offset, pml_val, color=color_pml, width=width_pml, style=f_style(style_pml))
+            lb_pml := label.new(label_offset, pml_val, "PML", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_pml, size=size.small)
+
+    // 30m OR Box, Mid, & Projections — hide stale OR in advance mode
+    if show_or_vis and not hide_pm_or and not na(or_high) and not na(or_low) and not na(or_start_bar)
+        color active_border = show_or_border ? color_or_border : color.new(color.white, 100)
+        b_or := box.new(left=or_start_bar, top=or_high, right=bar_index, bottom=or_low,
+                        bgcolor=color_or_fill, border_color=active_border, border_style=line.style_dashed)
+
+        float or_mid_val = (or_high + or_low) / 2
+        float or_height  = or_high - or_low
+
+        if show_or_mid
+            l_or_mid := line.new(or_start_bar, or_mid_val, bar_index, or_mid_val, color=color_or_mid, width=1, style=line.style_dashed)
+
+        if show_or_ext_05
+            float up05_val = or_high + (0.5 * or_height)
+            float dn05_val = or_low - (0.5 * or_height)
+            l_or_up05  := line.new(or_start_bar, up05_val, label_offset, up05_val, color=color_or_ext, width=width_or_ext, style=f_style(style_or_ext))
+            lb_or_up05 := label.new(label_offset, up05_val, "+0.5X OR", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_or_ext, size=size.small)
+            l_or_dn05  := line.new(or_start_bar, dn05_val, label_offset, dn05_val, color=color_or_ext, width=width_or_ext, style=f_style(style_or_ext))
+            lb_or_dn05 := label.new(label_offset, dn05_val, "-0.5X OR", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_or_ext, size=size.small)
+
+        if show_or_ext_10
+            float up1_val = or_high + or_height
+            float dn1_val = or_low - or_height
+            l_or_up1   := line.new(or_start_bar, up1_val, label_offset, up1_val, color=color_or_ext, width=width_or_ext, style=f_style(style_or_ext))
+            lb_or_up1  := label.new(label_offset, up1_val, "+1.0X OR", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_or_ext, size=size.small)
+            l_or_dn1   := line.new(or_start_bar, dn1_val, label_offset, dn1_val, color=color_or_ext, width=width_or_ext, style=f_style(style_or_ext))
+            lb_or_dn1  := label.new(label_offset, dn1_val, "-1.0X OR", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_or_ext, size=size.small)
+
+        if show_or_ext_15
+            float up15_val = or_high + (1.5 * or_height)
+            float dn15_val = or_low - (1.5 * or_height)
+            l_or_up15  := line.new(or_start_bar, up15_val, label_offset, up15_val, color=color_or_ext, width=width_or_ext, style=f_style(style_or_ext))
+            lb_or_up15 := label.new(label_offset, up15_val, "+1.5X OR", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_or_ext, size=size.small)
+            l_or_dn15  := line.new(or_start_bar, dn15_val, label_offset, dn15_val, color=color_or_ext, width=width_or_ext, style=f_style(style_or_ext))
+            lb_or_dn15 := label.new(label_offset, dn15_val, "-1.5X OR", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_or_ext, size=size.small)
+
+        if show_or_ext_20
+            float up2_val = or_high + (2 * or_height)
+            float dn2_val = or_low - (2 * or_height)
+            l_or_up2   := line.new(or_start_bar, up2_val, label_offset, up2_val, color=color_or_ext, width=width_or_ext, style=f_style(style_or_ext))
+            lb_or_up2  := label.new(label_offset, up2_val, "+2.0X OR", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_or_ext, size=size.small)
+            l_or_dn2   := line.new(or_start_bar, dn2_val, label_offset, dn2_val, color=color_or_ext, width=width_or_ext, style=f_style(style_or_ext))
+            lb_or_dn2  := label.new(label_offset, dn2_val, "-2.0X OR", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_or_ext, size=size.small)
