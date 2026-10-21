@@ -613,6 +613,7 @@ var int   em_start_bar = na
 var int   em_open_time = na
 var int   em_last_rth_bar = na
 var array<line> em_hist = array.new<line>()
+var array<line> em_today_done = array.new<line>()   // today's ladder after the close (redrawn on last bar)
 
 float em_scale    = em_unit == "Normal day (0.8σ)" ? 0.8 : 1.0
 bool  show_em_vis = show_em and timeframe.isintraday and (tf_in_minutes <= htf_max_tf)
@@ -866,7 +867,27 @@ if barstate.islast
             l_or_dn4   := line.new(or_start_bar, dn4_val, label_offset, dn4_val, color=color_or_ext, width=width_or_ext, style=f_style(style_or_ext))
             lb_or_dn4  := label.new(label_offset, dn4_val, "-4.0X OR", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_or_ext, size=size.small)
 
-    // Expected Move ladder — hide stale EM in advance mode (same as OR)
+    // After the close (advance mode), show today's finished session like a past day
+    while em_today_done.size() > 0
+        line.delete(em_today_done.shift())
+    if show_em_vis and hide_pm_or and show_em_hist and not na(em_pts) and not na(em_start_bar) and not na(em_last_rth_bar)
+        color tc = em_used_fb ? color.new(color_em, 60) : color.new(color_em, 30)
+        if show_em_open
+            f_em_hist(em_start_bar, em_last_rth_bar, em_open, em_today_done, color.new(color_em, 60))
+        if show_em_05
+            f_em_hist(em_start_bar, em_last_rth_bar, em_open + 0.5 * em_pts, em_today_done, tc)
+            f_em_hist(em_start_bar, em_last_rth_bar, em_open - 0.5 * em_pts, em_today_done, tc)
+        if show_em_10
+            f_em_hist(em_start_bar, em_last_rth_bar, em_open + em_pts, em_today_done, tc)
+            f_em_hist(em_start_bar, em_last_rth_bar, em_open - em_pts, em_today_done, tc)
+        if show_em_15
+            f_em_hist(em_start_bar, em_last_rth_bar, em_open + 1.5 * em_pts, em_today_done, tc)
+            f_em_hist(em_start_bar, em_last_rth_bar, em_open - 1.5 * em_pts, em_today_done, tc)
+        if show_em_20
+            f_em_hist(em_start_bar, em_last_rth_bar, em_open + 2.0 * em_pts, em_today_done, tc)
+            f_em_hist(em_start_bar, em_last_rth_bar, em_open - 2.0 * em_pts, em_today_done, tc)
+
+    // Expected Move ladder (live) — hide stale EM in advance mode (same as OR)
     if show_em_vis and not hide_pm_or and not na(em_pts) and not na(em_start_bar)
         string em_src = em_used_fb ? "VIX (fallback)" : "VIX1D"
         string em_tip = em_src + " @ open: " + str.tostring(em_vol, "#.##") + "\n1σ = " + str.tostring(em_sigma, "#.##") + " pts\n1 EM = " + str.tostring(em_pts, "#.##") + " pts (" + em_unit + ")\nAnchor (open): " + str.tostring(em_open, "#.##")
