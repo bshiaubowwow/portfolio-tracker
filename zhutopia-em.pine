@@ -99,12 +99,15 @@ show_em_10      = input.bool(true,   title="Show ±1.0 EM", group="Expected Move
 show_em_15      = input.bool(true,   title="Show ±1.5 EM", group="Expected Move")
 show_em_20      = input.bool(false,  title="Show ±2.0 EM", group="Expected Move")
 show_em_open    = input.bool(false,  title="Show Open (anchor) Line", group="Expected Move")
-show_em_hist    = input.bool(true,   title="Show Past Days", group="Expected Move",
-    tooltip="Draw each prior session's EM ladder across that day's bars, for reviewing how price behaved around the lines.")
-em_hist_days    = input.int(10,      title="Past Days to Show", minval=1, maxval=40, group="Expected Move")
 color_em        = input.color(color.aqua,                title="EM Color", group="Expected Move")
 style_em        = input.string("Dotted",                 title="EM Style", options=["Solid", "Dashed", "Dotted"], group="Expected Move")
 width_em        = input.int(1,                           title="EM Thickness", minval=1, maxval=5, group="Expected Move")
+
+// Past Days (review mode)
+show_hist       = input.bool(true,  title="Show Past Days", group="Past Days",
+    tooltip="Draw each prior session's levels (YD, PM, OR box/mid/extensions, EM) across that day's bars. Uses the same on/off toggles as the live levels.")
+hist_days       = input.int(10,     title="Days to Show", minval=1, maxval=40, group="Past Days")
+hist_transp     = input.int(50,     title="Past Day Fade (0 = solid)", minval=0, maxval=90, group="Past Days")
 
 // ==========================================
 // HELPER FUNCTIONS
@@ -611,42 +614,9 @@ var float em_vol       = na
 var bool  em_used_fb   = false
 var int   em_start_bar = na
 var int   em_open_time = na
-var int   em_last_rth_bar = na
-var array<line> em_hist = array.new<line>()
-var array<line> em_today_done = array.new<line>()   // today's ladder after the close (redrawn on last bar)
 
 float em_scale    = em_unit == "Normal day (0.8σ)" ? 0.8 : 1.0
 bool  show_em_vis = show_em and timeframe.isintraday and (tf_in_minutes <= htf_max_tf)
-
-f_em_hist(int x1, int x2, float y, array<line> arr, color c) =>
-    arr.push(line.new(x1, y, x2, y, color=c, width=width_em, style=f_style(style_em)))
-
-// On the first bar of a new day, draw the PREVIOUS day's ladder across its bars
-// (values are still yesterday's here — the reset happens just below).
-if new_rth_day and show_em_hist and show_em_vis and not na(em_vol) and not na(em_open) and not na(em_start_bar) and not na(em_last_rth_bar)
-    float hp = em_open * (em_vol / 100.0) / math.sqrt(252) * em_scale
-    color hc = em_used_fb ? color.new(color_em, 60) : color.new(color_em, 30)
-    if show_em_open
-        f_em_hist(em_start_bar, em_last_rth_bar, em_open, em_hist, color.new(color_em, 60))
-    if show_em_05
-        f_em_hist(em_start_bar, em_last_rth_bar, em_open + 0.5 * hp, em_hist, hc)
-        f_em_hist(em_start_bar, em_last_rth_bar, em_open - 0.5 * hp, em_hist, hc)
-    if show_em_10
-        f_em_hist(em_start_bar, em_last_rth_bar, em_open + hp, em_hist, hc)
-        f_em_hist(em_start_bar, em_last_rth_bar, em_open - hp, em_hist, hc)
-    if show_em_15
-        f_em_hist(em_start_bar, em_last_rth_bar, em_open + 1.5 * hp, em_hist, hc)
-        f_em_hist(em_start_bar, em_last_rth_bar, em_open - 1.5 * hp, em_hist, hc)
-    if show_em_20
-        f_em_hist(em_start_bar, em_last_rth_bar, em_open + 2.0 * hp, em_hist, hc)
-        f_em_hist(em_start_bar, em_last_rth_bar, em_open - 2.0 * hp, em_hist, hc)
-    // Keep only the last N days
-    int em_lpd = (show_em_open ? 1 : 0) + (show_em_05 ? 2 : 0) + (show_em_10 ? 2 : 0) + (show_em_15 ? 2 : 0) + (show_em_20 ? 2 : 0)
-    while em_hist.size() > em_hist_days * em_lpd
-        line.delete(em_hist.shift())
-
-if in_rth
-    em_last_rth_bar := bar_index
 
 if new_rth_day
     em_open      := open
@@ -667,6 +637,89 @@ if in_rth and na(em_vol) and not na(em_open)
 
 float em_sigma = na(em_vol) or na(em_open) ? na : em_open * (em_vol / 100.0) / math.sqrt(252)
 float em_pts   = na(em_sigma) ? na : em_sigma * em_scale
+
+// ==========================================
+// PAST-DAY HISTORY (review mode)
+// ==========================================
+// Each RTH bar snapshots the levels that applied to the current session.
+// On the first bar of the next session, that snapshot is drawn across the
+// finished day's bars (faded). Same toggles as the live levels.
+var float h_ydh = na, var float h_ydl = na, var float h_ydc = na
+var float h_pmh = na, var float h_pml = na
+var float h_orh = na, var float h_orl = na
+var int   h_or_start = na
+var float h_em_open = na, var float h_em_pts = na
+var int   h_start = na, var int h_end = na
+
+var array<line> hist_lines  = array.new<line>()
+var array<int>  hist_counts = array.new<int>()
+var array<box>  hist_boxes  = array.new<box>()
+
+f_hl(int x1, int x2, float y, color c, int w, string st, array<line> arr) =>
+    int added = 0
+    if not na(y) and not na(x1) and not na(x2)
+        arr.push(line.new(x1, y, x2, y, color=color.new(c, hist_transp), width=w, style=f_style(st)))
+        added := 1
+    added
+
+f_draw_day(array<line> arr, array<box> barr) =>
+    int n = 0
+    if show_daily_vis
+        n += f_hl(h_start, h_end, h_ydh, color_ydh, width_ydh, style_ydh, arr)
+        n += f_hl(h_start, h_end, h_ydl, color_ydl, width_ydl, style_ydl, arr)
+        n += f_hl(h_start, h_end, h_ydc, color_ydc, width_ydc, style_ydc, arr)
+    if show_pm_vis
+        n += f_hl(h_start, h_end, h_pmh, color_pmh, width_pmh, style_pmh, arr)
+        n += f_hl(h_start, h_end, h_pml, color_pml, width_pml, style_pml, arr)
+    if show_or_vis and not na(h_orh) and not na(h_orl) and not na(h_or_start)
+        float hh = h_orh - h_orl
+        color bc = show_or_border ? color.new(color_or_border, hist_transp) : color.new(color.white, 100)
+        barr.push(box.new(h_or_start, h_orh, h_end, h_orl, bgcolor=color.new(color_or_fill, 92), border_color=bc, border_style=line.style_dashed))
+        if show_or_mid
+            n += f_hl(h_or_start, h_end, (h_orh + h_orl) / 2, color_or_mid, 1, "Dashed", arr)
+        array<float> ks = array.from(0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0)
+        array<bool>  on = array.from(show_or_ext_05, show_or_ext_10, show_or_ext_15, show_or_ext_20, show_or_ext_25, show_or_ext_30, show_or_ext_35, show_or_ext_40)
+        for i = 0 to 7
+            if on.get(i)
+                n += f_hl(h_or_start, h_end, h_orh + ks.get(i) * hh, color_or_ext, width_or_ext, style_or_ext, arr)
+                n += f_hl(h_or_start, h_end, h_orl - ks.get(i) * hh, color_or_ext, width_or_ext, style_or_ext, arr)
+    if show_em_vis and not na(h_em_open) and not na(h_em_pts)
+        if show_em_open
+            n += f_hl(h_start, h_end, h_em_open, color_em, 1, "Dashed", arr)
+        array<float> eks = array.from(0.5, 1.0, 1.5, 2.0)
+        array<bool>  eon = array.from(show_em_05, show_em_10, show_em_15, show_em_20)
+        for i = 0 to 3
+            if eon.get(i)
+                n += f_hl(h_start, h_end, h_em_open + eks.get(i) * h_em_pts, color_em, width_em, style_em, arr)
+                n += f_hl(h_start, h_end, h_em_open - eks.get(i) * h_em_pts, color_em, width_em, style_em, arr)
+    n
+
+// New session: draw the day that just finished, then trim to N days
+if new_rth_day and show_hist and not na(h_start) and not na(h_end)
+    hist_counts.push(f_draw_day(hist_lines, hist_boxes))
+    while hist_counts.size() > hist_days
+        int k = hist_counts.shift()
+        if k > 0
+            for j = 1 to k
+                line.delete(hist_lines.shift())
+    while hist_boxes.size() > hist_days
+        box.delete(hist_boxes.shift())
+
+// Snapshot the current session (after drawing, so the previous day is used above)
+if in_rth
+    if new_rth_day
+        h_start := bar_index
+    h_end      := bar_index
+    h_ydh      := norm_yd_h
+    h_ydl      := norm_yd_l
+    h_ydc      := norm_yd_c
+    h_pmh      := pmh_val
+    h_pml      := pml_val
+    h_orh      := or_high
+    h_orl      := or_low
+    h_or_start := or_start_bar
+    h_em_open  := em_open
+    h_em_pts   := em_pts
 
 
 // ==========================================
@@ -696,6 +749,8 @@ var line l_or_dn05  = na, var label lb_or_dn05 = na
 var line l_or_dn1   = na, var label lb_or_dn1  = na
 var line l_or_dn15  = na, var label lb_or_dn15 = na
 var line l_or_dn2   = na, var label lb_or_dn2  = na
+var array<line> today_lines = array.new<line>()
+var array<box>  today_boxes = array.new<box>()
 var line l_em_open = na, var label lb_em_open = na
 var line l_em_up05 = na, var label lb_em_up05 = na
 var line l_em_up10 = na, var label lb_em_up10 = na
@@ -868,24 +923,12 @@ if barstate.islast
             lb_or_dn4  := label.new(label_offset, dn4_val, "-4.0X OR", style=label.style_label_left, color=color.new(color.white, 100), textcolor=color_or_ext, size=size.small)
 
     // After the close (advance mode), show today's finished session like a past day
-    while em_today_done.size() > 0
-        line.delete(em_today_done.shift())
-    if show_em_vis and hide_pm_or and show_em_hist and not na(em_pts) and not na(em_start_bar) and not na(em_last_rth_bar)
-        color tc = em_used_fb ? color.new(color_em, 60) : color.new(color_em, 30)
-        if show_em_open
-            f_em_hist(em_start_bar, em_last_rth_bar, em_open, em_today_done, color.new(color_em, 60))
-        if show_em_05
-            f_em_hist(em_start_bar, em_last_rth_bar, em_open + 0.5 * em_pts, em_today_done, tc)
-            f_em_hist(em_start_bar, em_last_rth_bar, em_open - 0.5 * em_pts, em_today_done, tc)
-        if show_em_10
-            f_em_hist(em_start_bar, em_last_rth_bar, em_open + em_pts, em_today_done, tc)
-            f_em_hist(em_start_bar, em_last_rth_bar, em_open - em_pts, em_today_done, tc)
-        if show_em_15
-            f_em_hist(em_start_bar, em_last_rth_bar, em_open + 1.5 * em_pts, em_today_done, tc)
-            f_em_hist(em_start_bar, em_last_rth_bar, em_open - 1.5 * em_pts, em_today_done, tc)
-        if show_em_20
-            f_em_hist(em_start_bar, em_last_rth_bar, em_open + 2.0 * em_pts, em_today_done, tc)
-            f_em_hist(em_start_bar, em_last_rth_bar, em_open - 2.0 * em_pts, em_today_done, tc)
+    while today_lines.size() > 0
+        line.delete(today_lines.shift())
+    while today_boxes.size() > 0
+        box.delete(today_boxes.shift())
+    if show_hist and hide_pm_or and not na(h_start) and not na(h_end)
+        int _today_n = f_draw_day(today_lines, today_boxes)
 
     // Expected Move ladder (live) — hide stale EM in advance mode (same as OR)
     if show_em_vis and not hide_pm_or and not na(em_pts) and not na(em_start_bar)
