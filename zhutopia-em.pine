@@ -109,6 +109,10 @@ show_hist       = input.bool(true,  title="Show Past Days", group="Past Days",
 hist_days       = input.int(10,     title="Days to Show", minval=1, maxval=40, group="Past Days")
 hist_transp     = input.int(50,     title="Past Day Fade (0 = solid)", minval=0, maxval=90, group="Past Days")
 
+// Study export
+show_export     = input.bool(true,  title="Export Study Values (Data Window)", group="Study Export",
+    tooltip="Adds EM open/vol/points, OR high/low, YD levels to the Data Window and 'Export chart data' CSV. Nothing is drawn on the chart.")
+
 // ==========================================
 // HELPER FUNCTIONS
 // ==========================================
@@ -637,6 +641,22 @@ if in_rth and na(em_vol) and not na(em_open)
 
 float em_sigma = na(em_vol) or na(em_open) ? na : em_open * (em_vol / 100.0) / math.sqrt(252)
 float em_pts   = na(em_sigma) ? na : em_sigma * em_scale
+
+// ==========================================
+// STUDY EXPORT — data window only (nothing drawn on chart)
+// ==========================================
+// Values appear in the Data Window and in "Export chart data" CSVs, so the
+// EM vs OR study uses the indicator's exact anchors instead of screenshot reads.
+plot(show_export ? em_open : na,                    title="X_EM_Open",  display=display.data_window, editable=false)
+plot(show_export ? em_vol : na,                     title="X_EM_Vol",   display=display.data_window, editable=false)
+plot(show_export ? em_pts : na,                     title="X_EM_Pts",   display=display.data_window, editable=false)
+plot(show_export ? (em_used_fb ? 1 : 0) : na,       title="X_EM_FB",    display=display.data_window, editable=false)
+plot(show_export ? or_high : na,                    title="X_OR_High",  display=display.data_window, editable=false)
+plot(show_export ? or_low : na,                     title="X_OR_Low",   display=display.data_window, editable=false)
+plot(show_export ? last_yd_h : na,                  title="X_YDH",      display=display.data_window, editable=false)
+plot(show_export ? last_yd_l : na,                  title="X_YDL",      display=display.data_window, editable=false)
+plot(show_export ? last_yd_c : na,                  title="X_YDC",      display=display.data_window, editable=false)
+plot(show_export ? (in_rth ? 1 : 0) : na,           title="X_RTH",      display=display.data_window, editable=false)
 
 // ==========================================
 // PAST-DAY HISTORY (review mode)
