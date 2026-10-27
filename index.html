@@ -1126,10 +1126,35 @@ document.getElementById('h-total').textContent = fmt(endVal);
   }
 
   function updateTradesHeader() {
-    if (!_dailyData || !_dailyData.length) return;
-    const latest = _dailyData[_dailyData.length - 1];
-    document.getElementById('h-wb-balance').textContent = fmt(latest.balance);
-    document.getElementById('h-wb-date').textContent = latest.date;
+    // Current balance = starting balance + ALL closed P&L since start (incl. today) + all transfers to date
+    if (!_sizeCalcData || _sizeCalcData.startBalance === null || !_tradesData) return;
+    const { startBalance, startDate, transfers } = _sizeCalcData;
+    let pnl = 0, lastActivity = startDate || '';
+    _tradesData.closed.forEach(lot => {
+      const cd = toYMD(lot.closeTime);
+      if (!cd || (startDate && cd < startDate)) return;
+      pnl += lot.pnl;
+      if (cd > lastActivity) lastActivity = cd;
+    });
+    let xfer = 0;
+    transfers.forEach(tr => {
+      if (startDate && tr.date < startDate) return;
+      xfer += tr.amount;
+      if (tr.date > lastActivity) lastActivity = tr.date;
+    });
+    document.getElementById('h-wb-balance').textContent = fmt(startBalance + pnl + xfer);
+    document.getElementById('h-wb-date').textContent = lastActivity || '—';
+  }
+
+  // Normalize any trade/close timestamp to local 'YYYY-MM-DD' (handles "(expired)"/"(settled)" suffixes
+  // and bare 'YYYY-MM-DD' strings, which JS would otherwise parse as UTC and shift back a day in PT)
+  function toYMD(s) {
+    if (!s) return '';
+    const str = String(s).replace(/\s*\(.*\)$/, '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+    const d = parseTradeDate(str);
+    if (isNaN(d)) return '';
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
   }
 
   // ── TRADES ──
@@ -1166,6 +1191,14 @@ document.getElementById('h-total').textContent = fmt(endVal);
       type: type==='C' ? 'Call' : 'Put',
       strike: parseInt(strikeRaw) / 1000
     };
+  }
+
+  // Calendar days from open date to expiry (0 = same-day expiry)
+  function tradeDTE(t) {
+    var o = toYMD(t.openTime), e = t.parsed && t.parsed.expiry;
+    if (!o || !e) return null;
+    var oa = o.split('-').map(Number), ea = e.split('-').map(Number);
+    return Math.round((Date.UTC(ea[0],ea[1]-1,ea[2]) - Date.UTC(oa[0],oa[1]-1,oa[2])) / 86400000);
   }
 
   function parseTradeDate(s) {
@@ -1358,15 +1391,11 @@ document.getElementById('h-total').textContent = fmt(endVal);
     if (startDate) dateSet.add(startDate);
     const lots = closedLots || [];
     lots.forEach(lot => {
-      const d = parseTradeDate(lot.closeTime.replace(/\s*\(.*\)$/, ''));
-      if (!isNaN(d)) {
-        dateSet.add(d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'));
-      }
+      const cd = toYMD(lot.closeTime);
+      if (cd) dateSet.add(cd);
       // Also add open dates so we have balance for sizing
-      const od = parseTradeDate(lot.openTime);
-      if (!isNaN(od)) {
-        dateSet.add(od.getFullYear() + '-' + String(od.getMonth()+1).padStart(2,'0') + '-' + String(od.getDate()).padStart(2,'0'));
-      }
+      const od = toYMD(lot.openTime);
+      if (od) dateSet.add(od);
     });
     transfers.forEach(tr => dateSet.add(tr.date));
     // Also add today
@@ -1376,17 +1405,15 @@ document.getElementById('h-total').textContent = fmt(endVal);
     const allDates = [...dateSet].filter(d => d >= startDate).sort();
     // For each date, balance = startBalance + P&L from lots closed BEFORE that date + transfers BEFORE that date
     _dailyData = allDates.map(dateStr => {
+      // Starting balance is the opening balance on startDate, so only count activity on/after startDate
       let cumPnL = 0;
       lots.forEach(lot => {
-        const d = parseTradeDate(lot.closeTime.replace(/\s*\(.*\)$/, ''));
-        if (!isNaN(d)) {
-          const closeDate = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-          if (closeDate < dateStr) cumPnL += lot.pnl;
-        }
+        const closeDate = toYMD(lot.closeTime);
+        if (closeDate && closeDate >= (startDate || "") && closeDate < dateStr) cumPnL += lot.pnl;
       });
       let cumTransfers = 0;
       transfers.forEach(tr => {
-        if (tr.date < dateStr) cumTransfers += tr.amount;
+        if (tr.date >= (startDate || "") && tr.date < dateStr) cumTransfers += tr.amount;
       });
       return { date: dateStr, balance: startBalance + cumPnL + cumTransfers };
     });
@@ -1485,6 +1512,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
       // Build daily balances from starting balance + closed lot P&L + transfers
       buildDailyBalances(_tradesData.closed);
       _tradesLoaded = true;
+      updateTradesHeader();
       renderTrades();
     } catch(e) {
       console.error('Load trades error:', e);
@@ -2065,6 +2093,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
       type: t => t.parsed.type,
       strike: t => t.parsed.strike,
       expiry: t => t.parsed.expiry,
+      dte: t => { var d = tradeDTE(t); return d === null ? 9999 : d; },
       qty: t => t.totalQty,
       cost: t => t.totalCost,
       pnl: t => t.totalPnL,
@@ -2093,7 +2122,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
       '<table class="trades-table">' +
         '<thead><tr>' +
           sortTh('Opened', 'openTime') + sortTh('W/L', 'result') + sortTh('Style', 'style') +
-          sortTh('Underlying', 'underlying') + sortTh('Type', 'type') + sortTh('Strike', 'strike') + sortTh('Expiry', 'expiry') +
+          sortTh('Underlying', 'underlying') + sortTh('Type', 'type') + sortTh('Strike', 'strike') + sortTh('Expiry', 'expiry') + sortTh('DTE', 'dte') +
           sortTh('P&L', 'pnl') + sortTh('P&L %', 'pnlPct') + sortTh('Size %', 'sizePct') +
           sortTh('Cost Basis', 'cost') + sortTh('Qty', 'qty') +
           sortTh('Closed', 'closeTime') + sortTh('Time Held', 'days') +
@@ -2109,6 +2138,7 @@ document.getElementById('h-total').textContent = fmt(endVal);
           '<td><span class="badge ' + (t.parsed.type==='Call'?'badge-call':'badge-put') + '">' + t.parsed.type + '</span></td>' +
           '<td>$' + t.parsed.strike.toFixed(0) + '</td>' +
           '<td>' + t.parsed.expiryDisplay + '</td>' +
+          '<td>' + (function(d){return d===null?'—':d+'DTE'})(tradeDTE(t)) + '</td>' +
           '<td class="' + cls(t.totalPnL) + '">' + fmtS(t.totalPnL) + '</td>' +
           '<td class="' + cls(t.pnlPct) + '">' + (t.pnlPct >= 0 ? '+' : '') + t.pnlPct.toFixed(0) + '%</td>' +
           '<td>' + fmtSizePct(t.sizePct) + '</td>' +

@@ -25,7 +25,9 @@ Single HTML file dashboard for tracking multi-account investments and day tradin
 
 **WB Size Calc** — starting balance + transfer log for dynamic daily balance computation
 - Row 1: "Starting Balance" header
-- Row 2: "as of M/D/YYYY" in col A, dollar amount in col B (e.g. $4,178)
+- Row 2: "as of M/D/YYYY" in col A, dollar amount in col B (e.g. $2,799 as of 10/26/2026)
+  - "as of" = opening balance going INTO that day (before that day's trades); trades closed on/after that date are added
+  - Trade log was reset to start 10/26/2026 alongside the starting balance
 - Row 4: "Date" | "Deposit (+)/Withdrawal (-)" headers
 - Row 5+: transfer entries (date, signed dollar amount — positive=deposit, negative=withdrawal)
 - Daily balances are computed dynamically: starting balance + cumulative closed trade P&L + cumulative transfers
@@ -47,7 +49,7 @@ Core sections in order:
 6. **Performance by Factor** — dropdown (Trades per Day, Position Size, Trade # in Day)
 7. **Performance by Time of Day** — 30-min buckets, ET→PT conversion, day trades only
 8. **Open Positions**
-9. **Trade Log** — sortable, columns: Opened, W/L, Style, Underlying, Type, Strike, Expiry, P&L, P&L %, Size%, Cost Basis, Qty, Closed, Time Held
+9. **Trade Log** — sortable, columns: Opened, W/L, Style, Underlying, Type, Strike, Expiry, DTE, P&L, P&L %, Size%, Cost Basis, Qty, Closed, Time Held
 
 ## Key Calculations
 
@@ -78,6 +80,6 @@ Core sections in order:
 - Ben is on PST — times are converted from ET (subtract 3 hours)
 - Primarily trades SPY/SPX/SPXW 0DTE options
 - Day trading with occasional swings
-- Risk is 100% (sizing for full premium loss)
+- Sizing (as of 10/26/2026): ~10% cost basis per 0DTE trade; target ≥ +50% on premium; stop ~-30% (a -30% hit means bad entry or bad setup). Never plans for a full premium loss.
 - WB Size Calc tab has a one-time starting balance; daily balances computed from trades + transfers automatically
 - WB Brokerage Trades is a paste-over from Webull export (never manually add rows)
