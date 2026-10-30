@@ -46,18 +46,27 @@ Core sections in order:
 3. **Edge** — Total P&L (with account return %), Win Rate, Avg Win, Avg Loss, Win:Loss ratio, Breakeven WR, Trades
 4. **Sizing & P&L + Discipline** — side by side tables, All vs Last 10 with delta arrows
 5. **Equity Curve** — P&L ($/%) toggle, daily aggregation, adaptive X-axis, tooltip, Monte Carlo bands
-6. **Performance by Factor** — dropdown (Trades per Day, Position Size, Trade # in Day)
-7. **Performance by Time of Day** — 30-min buckets, ET→PT conversion, day trades only
-8. **Open Positions**
-9. **Trade Log** — sortable, columns: Opened, W/L, Style, Underlying, Type, Strike, Expiry, DTE, P&L, P&L %, Size%, Cost Basis, Qty, Closed, Time Held
+6. **Calendar**
+7. **Rolling N Trades** — metric dropdown (Expectancy / Win Rate / Win:Loss) + window dropdown (10/20/30, default 10)
+   - Solid orange = rolling stat over last N trades ending at each trade; dashed grey = cumulative stat over all trades up to that point
+   - Red dotted = breakeven for the rolling window: Win:Loss view → (1 − WR)/WR; Win Rate view → 100/(1 + W:L); Expectancy view → $0
+   - X spacing is per trade (even), labels are dates (trade open date, one per day, collision-skipped); tooltip shows trade #, date, rolling, cumulative, breakeven
+   - Y-axis fits data with a minimum span (20 pts WR, 1.5 W:L) so it isn't squished; breakeven spikes are clipped
+   - Win:Loss is null (line gap) when a window has no winners or no losers
+   - Calc lives in one place: `ROLLING_METRICS`, `rollingStat()`, `computeRollingPoints()`
+8. **Performance by Factor** — dropdown (Trades per Day, Position Size, Trade # in Day, Day of Week)
+9. **Performance by Time of Day** — 30-min buckets, ET→PT conversion, day trades only
+10. **Open Positions**
+11. **Trade Log** — sortable, columns: Opened, W/L, Style, Underlying, Type, Strike, Expiry, DTE, P&L, P&L %, Size%, Cost Basis, Qty, Closed, Time Held
 
 ## Key Calculations
 
 - **Size %** = cost basis / daily opening balance
-- **Win:Loss** = avg winning P&L / |avg losing P&L|, displayed as X:1
+- **Win:Loss** = avg winning P&L / |avg losing P&L|, displayed as X:1 (not total wins / total losses — that's profit factor, which Ben decided not to show)
+- **Expectancy** = (WR × avg win) − (LR × avg loss) = avg P&L per trade
 - **Breakeven WR** = 1 / (1 + reward/risk) × 100
 - **Account Return %** = total P&L / starting balance for the period
-- Trades are aggregated at contract level (same option symbol = one trade regardless of adds/trims)
+- Trades are aggregated at contract level: same option symbol = one trade from first buy until the position goes flat, regardless of adds/trims. Going flat then re-entering the same contract = a new trade. While a trimmed position is still open, the trimmed portion can temporarily show as its own closed trade until the rest closes.
 - Day trade = daysHeld === 0 (all lots opened and closed same day)
 - Hold time stored in milliseconds for sub-day precision
 

@@ -1691,100 +1691,204 @@ document.getElementById('h-total').textContent = fmt(endVal);
     </div>`;
   }
 
-  function renderRollingChart(trades) {
-    const WINDOW = 10;
-    if (trades.length < WINDOW) return '<div class="section-title">Rolling ' + WINDOW + ' Trades</div><div class="chart-wrap" style="padding:1.2rem 1.6rem"><p style="font-family:var(--mono);font-size:0.8rem;color:var(--text-3)">Need ' + WINDOW + '+ trades to display</p></div>';
-    const metrics = {
-      avgPnL: { label: 'Avg P&L', fn: function(slice) { return slice.length ? slice.reduce(function(s,t){return s+t.totalPnL},0)/slice.length : 0; }, fmt: function(v){return (v>=0?'+':'')+fmtN(v);} },
-      winRate: { label: 'Win Rate', fn: function(slice) { var wins = slice.filter(function(t){return t.totalPnL>0}).length; return slice.length ? wins/slice.length*100 : 0; }, fmt: function(v){return v.toFixed(0)+'%';} },
-      winLoss: { label: 'Win:Loss', fn: function(slice) { var w=slice.filter(function(t){return t.totalPnL>0}); var l=slice.filter(function(t){return t.totalPnL<0}); var avgW=w.length?w.reduce(function(s,t){return s+t.totalPnL},0)/w.length:0; var avgL=l.length?Math.abs(l.reduce(function(s,t){return s+t.totalPnL},0)/l.length):0; return avgL>0?avgW/avgL:0; }, fmt: function(v){return v.toFixed(1)+':1';} },
-    };
-    var m = metrics[rollingMetric];
-    var points = [];
-    for (var i = WINDOW-1; i < trades.length; i++) {
-      var slice = trades.slice(i-WINDOW+1, i+1);
-      points.push({ idx: i, val: m.fn(slice) });
+  // ── Rolling + cumulative stats chart ──
+  var ROLLING_METRICS = {
+    avgPnL:  { label: 'Expectancy', fmt: function(v){ return (v>=0?'+':'')+fmtN(v); } },
+    winRate: { label: 'Win Rate',   fmt: function(v){ return v.toFixed(0)+'%'; } },
+    winLoss: { label: 'Win:Loss',   fmt: function(v){ return v.toFixed(1)+':1'; } },
+  };
+
+  function rollingStat(metric, slice) {
+    if (!slice.length) return null;
+    var w = slice.filter(function(t){ return t.totalPnL > 0; });
+    var l = slice.filter(function(t){ return t.totalPnL < 0; });
+    if (metric === 'avgPnL') return slice.reduce(function(s,t){ return s + t.totalPnL; }, 0) / slice.length;
+    if (metric === 'winRate') return w.length / slice.length * 100;
+    // winLoss — undefined without at least one winner and one loser
+    if (!w.length || !l.length) return null;
+    var avgW = w.reduce(function(s,t){ return s + t.totalPnL; }, 0) / w.length;
+    var avgL = Math.abs(l.reduce(function(s,t){ return s + t.totalPnL; }, 0) / l.length);
+    return avgL > 0 ? avgW / avgL : null;
+  }
+
+  // One point per trade from trade #WINDOW onward: rolling value over last WINDOW trades + cumulative value over all trades so far
+  function computeRollingPoints(trades) {
+    var WINDOW = rollingWindow, points = [];
+    for (var i = WINDOW - 1; i < trades.length; i++) {
+      var win = trades.slice(i - WINDOW + 1, i + 1);
+      // Breakeven for the rolling window: Win:Loss needed given its win rate, or win rate needed given its Win:Loss
+      var be = null;
+      if (rollingMetric === 'winLoss') {
+        var wr = rollingStat('winRate', win) / 100;
+        be = wr > 0 && wr < 1 ? (1 - wr) / wr : null;
+      } else if (rollingMetric === 'winRate') {
+        var wl = rollingStat('winLoss', win);
+        be = wl !== null ? 100 / (1 + wl) : null;
+      } else {
+        be = 0;
+      }
+      points.push({
+        n: i + 1,
+        date: trades[i].firstOpen,
+        roll: rollingStat(rollingMetric, win),
+        cum:  rollingStat(rollingMetric, trades.slice(0, i + 1)),
+        be: be,
+      });
     }
-    if (!points.length) return '<div class="section-title">Rolling ' + WINDOW + ' Trades</div><div class="chart-wrap" style="padding:1.2rem 1.6rem"><p style="font-family:var(--mono);font-size:0.8rem;color:var(--text-3)">No data for selected filters</p></div>';
-    var options = Object.entries(metrics).map(function(e){return '<option value="'+e[0]+'"'+(e[0]===rollingMetric?' selected':'')+'>'+e[1].label+'</option>';}).join('');
-    return '<div class="section-title">Rolling ' + WINDOW + ' Trades</div>' +
-      '<div class="chart-wrap" style="padding:1.2rem 1.6rem">' +
-        '<div style="margin-bottom:0.8rem"><select onchange="setRollingMetric(this.value)" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);font-family:var(--mono);font-size:0.78rem;padding:0.35rem 0.6rem;border-radius:3px;outline:none;cursor:pointer">' + options + '</select></div>' +
+    return points;
+  }
+
+  function renderRollingChart(trades) {
+    var WINDOW = rollingWindow;
+    var selStyle = 'background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);font-family:var(--mono);font-size:0.78rem;padding:0.35rem 0.6rem;border-radius:3px;outline:none;cursor:pointer';
+    var metricOpts = Object.keys(ROLLING_METRICS).map(function(k){ return '<option value="'+k+'"'+(k===rollingMetric?' selected':'')+'>'+ROLLING_METRICS[k].label+'</option>'; }).join('');
+    var winOpts = [10,20,30].map(function(n){ return '<option value="'+n+'"'+(n===WINDOW?' selected':'')+'>'+n+' trades</option>'; }).join('');
+    var title = '<div class="section-title">Rolling ' + WINDOW + ' Trades</div>';
+    var controls = '<div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.8rem">' +
+      '<select onchange="setRollingMetric(this.value)" style="'+selStyle+'">' + metricOpts + '</select>' +
+      '<select onchange="setRollingWindow(this.value)" style="'+selStyle+'">' + winOpts + '</select>' +
+      '<span style="margin-left:auto;display:flex;gap:1rem;font-family:var(--mono);font-size:0.72rem;color:var(--text-3)">' +
+        '<span><span style="display:inline-block;width:14px;height:2px;background:#FF4E1A;vertical-align:middle;margin-right:5px"></span>Rolling ' + WINDOW + '</span>' +
+        '<span><span style="display:inline-block;width:14px;border-top:2px dashed #8B93B0;vertical-align:middle;margin-right:5px"></span>Cumulative</span>' +
+        '<span><span style="display:inline-block;width:14px;border-top:2px dotted #EF4444;vertical-align:middle;margin-right:5px"></span>' + (rollingMetric === 'avgPnL' ? 'Breakeven ($0)' : 'Breakeven (rolling)') + '</span>' +
+      '</span></div>';
+    var msg = function(t){ return title + '<div class="chart-wrap" style="padding:1.2rem 1.6rem">' + controls + '<p style="font-family:var(--mono);font-size:0.8rem;color:var(--text-3)">' + t + '</p></div>'; };
+    if (trades.length < WINDOW) return msg('Need ' + WINDOW + '+ trades to display (have ' + trades.length + ')');
+    var pts = computeRollingPoints(trades).filter(function(p){ return p.roll !== null || p.cum !== null; });
+    if (!pts.length) return msg('No data for selected filters');
+    return title + '<div class="chart-wrap" style="padding:1.2rem 1.6rem">' + controls +
+      '<div style="position:relative">' +
         '<canvas id="rolling-chart" style="display:block;width:100%"></canvas>' +
-      '</div>';
+        '<div id="rolling-tooltip" style="display:none;position:absolute;background:#1C2133;border:1px solid var(--border);border-radius:4px;padding:0.6rem 0.8rem;font-family:var(--mono);font-size:0.75rem;pointer-events:none;z-index:10;min-width:150px"></div>' +
+      '</div></div>';
   }
 
   function drawRollingChart(trades) {
     var canvas = document.getElementById('rolling-chart');
-    if (!canvas || trades.length < 10) return;
-    var WINDOW = 10;
-    var metrics = {
-      avgPnL: function(slice) { return slice.length ? slice.reduce(function(s,t){return s+t.totalPnL},0)/slice.length : 0; },
-      winRate: function(slice) { var wins = slice.filter(function(t){return t.totalPnL>0}).length; return slice.length ? wins/slice.length*100 : 0; },
-      winLoss: function(slice) { var w=slice.filter(function(t){return t.totalPnL>0}); var l=slice.filter(function(t){return t.totalPnL<0}); var avgW=w.length?w.reduce(function(s,t){return s+t.totalPnL},0)/w.length:0; var avgL=l.length?Math.abs(l.reduce(function(s,t){return s+t.totalPnL},0)/l.length):0; return avgL>0?avgW/avgL:0; },
-    };
-    var fmts = {
-      avgPnL: function(v){return (v>=0?'+':'')+fmtN(v);},
-      winRate: function(v){return v.toFixed(0)+'%';},
-      winLoss: function(v){return v.toFixed(1)+':1';},
-    };
-    var fn = metrics[rollingMetric];
-    var fmt2 = fmts[rollingMetric];
-    var points = [];
-    for (var i = WINDOW-1; i < trades.length; i++) {
-      points.push(fn(trades.slice(i-WINDOW+1, i+1)));
-    }
+    if (!canvas || trades.length < rollingWindow) return;
+    var points = computeRollingPoints(trades);
+    var fmt2 = ROLLING_METRICS[rollingMetric].fmt;
+    var vals = [];
+    points.forEach(function(p){ if (p.roll !== null) vals.push(p.roll); if (p.cum !== null) vals.push(p.cum); });
+    if (!vals.length) return;
+
     var ctx = canvas.getContext('2d');
-    var dpr = window.devicePixelRatio||1;
-    var W = canvas.offsetWidth, H = 240;
+    var dpr = window.devicePixelRatio || 1;
+    var W = canvas.offsetWidth, H = 300;
     canvas.width = W*dpr; canvas.height = H*dpr;
-    canvas.style.height = H+'px';
-    ctx.scale(dpr,dpr);
-    ctx.clearRect(0,0,W,H);
+    canvas.style.height = H + 'px';
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, W, H);
 
-    var pad = {top:16,right:20,bottom:28,left:55};
-    var cW = W-pad.left-pad.right, cH = H-pad.top-pad.bottom;
-    var minV = Math.min(...points), maxV = Math.max(...points);
-    var range = maxV-minV || 1;
-    minV -= range*0.1; maxV += range*0.1; range = maxV-minV;
-    var xP = function(i){return points.length>1 ? pad.left+(i/(points.length-1))*cW : pad.left+cW/2;};
-    var yP = function(v){return pad.top+cH-((v-minV)/range)*cH;};
+    var pad = {top:16, right:20, bottom:28, left:55};
+    var cW = W - pad.left - pad.right, cH = H - pad.top - pad.bottom;
+    // Y range fits the data (rolling + cumulative + breakeven), with a minimum span so normal noise doesn't look dramatic.
+    // Breakeven can spike (e.g. very low win rate → huge required W:L), so it only widens the range up to a cap.
+    var dMin = Math.min.apply(null, vals), dMax = Math.max.apply(null, vals);
+    var MIN_SPAN = rollingMetric === 'winRate' ? 20 : rollingMetric === 'winLoss' ? 1.5 : Math.max(20, (dMax - dMin));
+    var beVals = points.map(function(p){ return p.be; }).filter(function(v){ return v !== null; });
+    var beCap = (dMax - dMin) * 0.5 + MIN_SPAN * 0.5;
+    beVals.forEach(function(v){ if (v < dMin && dMin - v <= beCap) dMin = v; if (v > dMax && v - dMax <= beCap) dMax = v; });
+    if (dMax - dMin < MIN_SPAN) { var mid = (dMax + dMin) / 2; dMin = mid - MIN_SPAN/2; dMax = mid + MIN_SPAN/2; }
+    var span = dMax - dMin;
+    var minV = dMin - span*0.1, maxV = dMax + span*0.1;
+    if (rollingMetric === 'winRate') { minV = Math.max(0, minV); maxV = Math.min(100, maxV); }
+    if (rollingMetric === 'winLoss') { minV = Math.max(0, minV); }
+    var range = maxV - minV || 1;
+    var xP = function(i){ return points.length > 1 ? pad.left + (i/(points.length-1))*cW : pad.left + cW/2; };
+    var yP = function(v){ return pad.top + cH - ((v-minV)/range)*cH; };
 
-    // Grid
-    var rawStep=range/4, mag=Math.pow(10,Math.floor(Math.log10(rawStep||1)));
-    var gStep=Math.ceil(rawStep/mag)*mag || 1;
-    var gStart=Math.ceil(minV/gStep)*gStep;
-    ctx.strokeStyle='#252A3C'; ctx.lineWidth=1;
-    for (var v=gStart; v<=maxV; v+=gStep) {
-      var y=yP(v);
-      ctx.beginPath(); ctx.moveTo(pad.left,y); ctx.lineTo(pad.left+cW,y); ctx.stroke();
-      ctx.font='11px DM Mono,monospace'; ctx.fillStyle='#CDD2E0'; ctx.textAlign='right';
-      ctx.fillText(fmt2(v), pad.left-6, y+4);
+    // Grid + Y labels — nice 1/2/2.5/5 steps, ~5 lines
+    var rawStep = range/5, mag = Math.pow(10, Math.floor(Math.log10(rawStep || 1)));
+    var nrm = rawStep / mag;
+    var gStep = (nrm <= 1 ? 1 : nrm <= 2 ? 2 : nrm <= 2.5 ? 2.5 : nrm <= 5 ? 5 : 10) * mag;
+    var gStart = Math.ceil(minV/gStep)*gStep;
+    var yFmt = rollingMetric === 'winLoss' ? function(v){ return (gStep < 1 ? v.toFixed(1) : v.toFixed(0)) + ':1'; } : fmt2;
+    ctx.lineWidth = 1;
+    ctx.font = '11px DM Mono,monospace'; ctx.textAlign = 'right';
+    for (var v = gStart; v <= maxV + 1e-9; v += gStep) {
+      var y = yP(v);
+      ctx.strokeStyle = '#252A3C';
+      ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cW, y); ctx.stroke();
+      ctx.fillStyle = '#CDD2E0';
+      ctx.fillText(yFmt(v), pad.left - 6, y + 4);
     }
 
-    // Zero line for avgPnL
-    if (rollingMetric === 'avgPnL' && minV < 0 && maxV > 0) {
-      ctx.strokeStyle='#6B7390'; ctx.lineWidth=1.5;
-      ctx.beginPath(); ctx.moveTo(pad.left,yP(0)); ctx.lineTo(pad.left+cW,yP(0)); ctx.stroke();
+    // Clip series to the plot area (breakeven can run off-scale)
+    ctx.save();
+    ctx.beginPath(); ctx.rect(pad.left, pad.top, cW, cH); ctx.clip();
+
+    // Breakeven line — red dotted. Above it = that window was profitable (for W:L / Expectancy); for Win Rate, above = profitable too.
+    (function(){
+      ctx.save();
+      ctx.strokeStyle = 'rgba(239,68,68,0.75)'; ctx.lineWidth = 1.5; ctx.setLineDash([2,4]);
+      ctx.beginPath();
+      var started = false;
+      points.forEach(function(p, i){
+        if (p.be === null) { started = false; return; }
+        if (!started) { ctx.moveTo(xP(i), yP(p.be)); started = true; } else ctx.lineTo(xP(i), yP(p.be));
+      });
+      ctx.stroke();
+      ctx.restore();
+    })();
+
+    // Draw a series, breaking the line where value is null
+    function drawLine(key, color, dashed) {
+      ctx.save();
+      ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+      ctx.setLineDash(dashed ? [5,4] : []);
+      ctx.beginPath();
+      var started = false;
+      points.forEach(function(p, i){
+        if (p[key] === null) { started = false; return; }
+        if (!started) { ctx.moveTo(xP(i), yP(p[key])); started = true; }
+        else ctx.lineTo(xP(i), yP(p[key]));
+      });
+      ctx.stroke();
+      ctx.restore();
     }
+    drawLine('cum', '#8B93B0', true);
+    drawLine('roll', '#FF4E1A', false);
+    ctx.fillStyle = '#FF4E1A';
+    points.forEach(function(p, i){ if (p.roll === null) return; ctx.beginPath(); ctx.arc(xP(i), yP(p.roll), 2.5, 0, Math.PI*2); ctx.fill(); });
+    ctx.restore(); // end clip
 
-    // Line
-    ctx.beginPath(); ctx.strokeStyle='#FF4E1A'; ctx.lineWidth=2; ctx.lineJoin='round';
-    points.forEach(function(v,i){i===0?ctx.moveTo(xP(i),yP(v)):ctx.lineTo(xP(i),yP(v));});
-    ctx.stroke();
-
-    // Dots
-    ctx.fillStyle='#FF4E1A';
-    points.forEach(function(v,i){ctx.beginPath();ctx.arc(xP(i),yP(v),2.5,0,Math.PI*2);ctx.fill();});
-
-    // X labels
-    var lStep = Math.max(1,Math.floor(points.length/5));
-    ctx.font='11px DM Mono,monospace'; ctx.fillStyle='#CDD2E0'; ctx.textAlign='center';
-    points.forEach(function(v,i){
-      if (i%lStep===0||i===points.length-1) {
-        ctx.fillText('#'+(i+WINDOW), xP(i), H-8);
-      }
+    // X labels — one per date (at first point of that date), skip any that would crowd the previous label
+    function md(d){ return (d.getMonth()+1) + '/' + d.getDate(); }
+    ctx.font = '11px DM Mono,monospace'; ctx.fillStyle = '#CDD2E0'; ctx.textAlign = 'center';
+    var lastX = -Infinity, lastKey = null, MIN_GAP = 44;
+    points.forEach(function(p, i){
+      var key = p.date.toDateString();
+      if (key === lastKey) return;
+      lastKey = key;
+      var x = xP(i);
+      if (x - lastX < MIN_GAP) return;
+      ctx.fillText(md(p.date), Math.min(Math.max(x, pad.left + 14), pad.left + cW - 14), H - 8);
+      lastX = x;
     });
+
+    // Tooltip — snap to nearest point by x
+    canvas.onmousemove = function(e) {
+      var rect = canvas.getBoundingClientRect();
+      var mx = e.clientX - rect.left;
+      var tip = document.getElementById('rolling-tooltip');
+      if (!tip) return;
+      if (mx < pad.left - 10 || mx > pad.left + cW + 10) { tip.style.display = 'none'; return; }
+      var i = points.length > 1 ? Math.round((mx - pad.left) / cW * (points.length - 1)) : 0;
+      i = Math.max(0, Math.min(points.length - 1, i));
+      var p = points[i];
+      var show = function(v){ return v === null ? '—' : fmt2(v); };
+      tip.innerHTML = '<div style="color:var(--text-3);margin-bottom:0.3rem">Trade #' + p.n + ' · ' + md(p.date) + '</div>' +
+        '<div style="color:var(--text-3)">Rolling ' + rollingWindow + ': <span style="color:#FF4E1A">' + show(p.roll) + '</span></div>' +
+        '<div style="color:var(--text-3)">Cumulative: <span style="color:var(--text-2)">' + show(p.cum) + '</span></div>' +
+        (rollingMetric === 'avgPnL' ? '' : '<div style="color:var(--text-3)">Breakeven: <span style="color:#EF4444">' + show(p.be) + '</span></div>');
+      tip.style.display = 'block';
+      var tipW = 170;
+      var px = xP(i);
+      tip.style.left = (px + 16 + tipW > canvas.offsetWidth ? px - tipW - 8 : px + 16) + 'px';
+      tip.style.top = Math.max(0, (e.clientY - rect.top - 40)) + 'px';
+    };
+    canvas.onmouseleave = function() { var t = document.getElementById('rolling-tooltip'); if (t) t.style.display = 'none'; };
   }
 
   function setBucketMetric(m) {
@@ -2177,8 +2281,14 @@ document.getElementById('h-total').textContent = fmt(endVal);
   }
 
   let tradesPnlUnit = '$'; // '$' | '%'
-  let rollingMetric = 'avgPnL'; // 'avgPnL' | 'winRate' | 'winLoss'
+  let rollingMetric = 'avgPnL'; // 'avgPnL' (Expectancy) | 'winRate' | 'winLoss'
+  let rollingWindow = 10; // 10 | 20 | 30
   let mcTrades = 50; // Monte Carlo projection trades
+
+  function setRollingWindow(n) {
+    rollingWindow = parseInt(n) || 10;
+    renderTrades();
+  }
 
   function setMcTrades(n) {
     mcTrades = parseInt(n) || 50;
